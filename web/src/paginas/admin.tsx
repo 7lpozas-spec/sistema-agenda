@@ -31,7 +31,7 @@ function visible(fila: Parametro): boolean {
 const ETIQUETA: Record<string, string> = {
   auth_modo: "Autenticación",
   zona_horaria: "Zona horaria",
-  hora_cierre_automatico: "Cierre automático",
+  gracia_cierre_minutos: "Gracia del cierre",
   hora_recordatorio: "Hora de recordatorio",
   minutos_deshacer_asistencia: "Minutos para deshacer",
   alerta_inasistencias: "Alerta de inasistencias",
@@ -281,26 +281,33 @@ function Cierre() {
   const [motivo, setMotivo] = useState("");
   const [propuestas, setPropuestas] = useState<Propuesta[]>([]);
   const [sinCupo, setSinCupo] = useState<Afectada[]>([]);
+  const [revisado, setRevisado] = useState<"dia" | "bloque" | "">("");
   const [error, setError] = useState("");
   const [aviso, setAviso] = useState("");
-  function aplicar(citas: Afectada[], lista: Propuesta[]) {
+  function aplicar(modo: "dia" | "bloque", citas: Afectada[], lista: Propuesta[]) {
     const asignadas = new Set(lista.map((fila) => fila.citaId));
     setPropuestas(lista);
     setSinCupo(citas.filter((fila) => !asignadas.has(fila.id)));
+    setRevisado(modo);
   }
-  async function cerrar(evento: FormEvent) {
+  function descartar() {
+    setPropuestas([]);
+    setSinCupo([]);
+    setRevisado("");
+    setAviso("");
+  }
+  async function revisarDia(evento: FormEvent) {
     evento.preventDefault();
     setError("");
     setAviso("");
     try {
-      const respuesta = await api<{ citas: Afectada[]; propuestas: Propuesta[] }>("/api/config/bloquear-dia", { method: "POST", body: { agendaId: agenda, fecha, motivo } });
-      aplicar(respuesta.citas, respuesta.propuestas);
-      setMotivo("");
+      const respuesta = await api<{ citas: Afectada[]; propuestas: Propuesta[] }>("/api/config/bloquear-dia", { method: "POST", body: { agendaId: agenda, fecha } });
+      aplicar("dia", respuesta.citas, respuesta.propuestas);
     } catch (falla) {
-      setError(falla instanceof Error ? falla.message : "No se pudo cerrar el día.");
+      setError(falla instanceof Error ? falla.message : "No se pudo revisar el día.");
     }
   }
-  async function cerrarBloque() {
+  async function revisarBloque() {
     setError("");
     setAviso("");
     if (!/^\d{2}:\d{2}$/.test(hora)) {
@@ -309,30 +316,39 @@ function Cierre() {
     }
     try {
       const respuesta = await api<{ citas: Afectada[]; propuestas: Propuesta[] }>("/api/bloques/bloquear", { method: "POST", body: { agendaId: agenda, fecha, hora } });
-      aplicar(respuesta.citas, respuesta.propuestas);
+      aplicar("bloque", respuesta.citas, respuesta.propuestas);
     } catch (falla) {
-      setError(falla instanceof Error ? falla.message : "No se pudo cerrar el bloque.");
+      setError(falla instanceof Error ? falla.message : "No se pudo revisar el bloque.");
     }
   }
   async function confirmar() {
     setError("");
     setAviso("");
+    if (revisado === "dia" && motivo.trim().length < 3) {
+      setError("Indique el motivo del día.");
+      return;
+    }
     try {
-      let hechas = 0;
-      for (let i = 0; i < propuestas.length; i += 40) {
-        const lote = propuestas.slice(i, i + 40);
-        const respuesta = await api<{ reubicadas: number }>("/api/config/reubicar", { method: "POST", body: { movimientos: lote.map((fila) => ({ citaId: fila.citaId, fecha: fila.fecha, hora: fila.hora })) } });
-        hechas += respuesta.reubicadas;
-      }
+      const respuesta = await api<{ reubicadas: number }>("/api/config/cierre/confirmar", {
+        method: "POST",
+        body: {
+          agendaId: agenda,
+          fecha,
+          hora: revisado === "bloque" ? hora : undefined,
+          motivo,
+          movimientos: propuestas.map((fila) => ({ citaId: fila.citaId, fecha: fila.fecha, hora: fila.hora })),
+        },
+      });
       setPropuestas([]);
-      if (hechas === 0) setError("No quedó ninguna cita reubicada.");
-      else setAviso(`Reubicadas: ${hechas}`);
+      setSinCupo([]);
+      setRevisado("");
+      setAviso(`Cerrado. Reubicadas: ${respuesta.reubicadas}`);
     } catch (falla) {
-      setError(falla instanceof Error ? falla.message : "No se pudo reubicar.");
+      setError(falla instanceof Error ? falla.message : "No se pudo cerrar.");
     }
   }
   return (
-    <form onSubmit={cerrar} className="grid gap-3 border border-line p-3">
+    <form onSubmit={revisarDia} className="grid gap-3 border border-line p-3">
       <h2 className="text-sm font-semibold">Cierre de día o bloque</h2>
       {error ? <Aviso>{error}</Aviso> : null}
       {aviso ? <p className="text-sm font-medium text-[#146c43]">{aviso}</p> : null}
@@ -342,18 +358,21 @@ function Cierre() {
       </select>
       <Fecha id="cierre-fecha" etiqueta="Fecha" valor={fecha} alCambiar={setFecha} />
       <Campo id="cierre-hora" etiqueta="Hora del bloque"><input id="cierre-hora" className={claseCampo} inputMode="numeric" pattern="[0-2][0-9]:[0-5][0-9]" placeholder="09:00" value={hora} onChange={(e) => setHora(e.target.value)} /></Campo>
-      <Campo id="cierre-motivo" etiqueta="Motivo del día"><input id="cierre-motivo" className={claseCampo} value={motivo} onChange={(e) => setMotivo(e.target.value)} required /></Campo>
+      <Campo id="cierre-motivo" etiqueta="Motivo del día"><input id="cierre-motivo" className={claseCampo} value={motivo} onChange={(e) => setMotivo(e.target.value)} /></Campo>
       <div className="flex flex-wrap gap-2">
-        <Boton>Bloquear día</Boton>
-        <button type="button" className="btn border border-line bg-white" onClick={() => void cerrarBloque()}>Bloquear bloque</button>
+        <Boton>Revisar día</Boton>
+        <button type="button" className="btn border border-line bg-white" onClick={() => void revisarBloque()}>Revisar bloque</button>
       </div>
-      {propuestas.length > 0 || sinCupo.length > 0 ? (
+      {revisado ? (
         <div className="grid gap-2">
           <ul className="grid gap-1 text-sm">
             {propuestas.map((fila) => <li key={fila.citaId}>{fila.horaActual} {fila.nombre} → {fila.fecha.slice(8)}-{fila.fecha.slice(5, 7)} {fila.hora}</li>)}
             {sinCupo.map((fila) => <li key={fila.id} className="text-alert">{fila.hora} {fila.nombre} · sin cupo</li>)}
           </ul>
-          {propuestas.length > 0 ? <button type="button" className="btn bg-sky text-white" onClick={() => void confirmar()}>Confirmar reubicación</button> : null}
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn bg-sky text-white" onClick={() => void confirmar()}>Confirmar cierre</button>
+            <button type="button" className="btn border border-line bg-white" onClick={descartar}>Cancelar</button>
+          </div>
         </div>
       ) : null}
     </form>

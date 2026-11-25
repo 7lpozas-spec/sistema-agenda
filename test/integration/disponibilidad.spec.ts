@@ -1,7 +1,8 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { digitoVerificador } from "../../src/domain/rut";
-import { partesEnZona } from "../../src/domain/tiempo";
+import { instanteLocal, partesEnZona, sumarDias } from "../../src/domain/tiempo";
+import { tareasProgramadas } from "../../src/app";
 import { cuposDesdeAhora, libresPorDia } from "../../src/servicios/disponibilidad";
 import { entrar, llamar } from "../soporte";
 
@@ -286,14 +287,26 @@ describe("cupos desde ahora en America/Santiago", () => {
     });
     expect(creada.status).toBe(201);
     const idMueve = (creada.json as { cita: { id: string } }).cita.id;
+    const antes = await env.DB.prepare("SELECT capacidad, usados FROM cupos_bloque WHERE agenda_id = 'GENERAL' AND fecha = ? AND hora = '10:00'").bind(origen).first<{ capacidad: number; usados: number }>();
     const bloqueo = await llamar("/config/bloquear-dia", { method: "POST", sesion: admin, body: { agendaId: "GENERAL", fecha: origen, motivo: "Corte de agua" } });
     expect(bloqueo.status).toBe(200);
     const propuestas = (bloqueo.json as { propuestas: { citaId: string; fecha: string; hora: string }[] }).propuestas;
     expect(propuestas.some((fila) => fila.citaId === idMueve && fila.fecha === destino)).toBe(true);
-    const confirma = await llamar("/config/reubicar", { method: "POST", sesion: operador, body: { movimientos: propuestas.filter((fila) => fila.citaId === idMueve) } });
+    const sigue = await env.DB.prepare("SELECT capacidad, usados FROM cupos_bloque WHERE agenda_id = 'GENERAL' AND fecha = ? AND hora = '10:00'").bind(origen).first<{ capacidad: number; usados: number }>();
+    expect(sigue).toEqual(antes);
+    const excepcionPrevia = await env.DB.prepare("SELECT COUNT(*) AS n FROM excepciones_dia WHERE agenda_id = 'GENERAL' AND fecha = ?").bind(origen).first<{ n: number }>();
+    expect(excepcionPrevia?.n).toBe(0);
+    const confirma = await llamar("/config/cierre/confirmar", {
+      method: "POST", sesion: admin,
+      body: { agendaId: "GENERAL", fecha: origen, motivo: "Corte de agua", movimientos: propuestas.filter((fila) => fila.citaId === idMueve) },
+    });
     expect(confirma.status).toBe(200);
     const movida = await env.DB.prepare("SELECT fecha, hora FROM citas WHERE id = ?").bind(idMueve).first<{ fecha: string; hora: string }>();
     expect(movida).toMatchObject({ fecha: destino, hora: "11:15" });
+    const cerrado = await env.DB.prepare("SELECT capacidad, usados FROM cupos_bloque WHERE agenda_id = 'GENERAL' AND fecha = ? AND hora = '10:00'").bind(origen).first<{ capacidad: number; usados: number }>();
+    expect(cerrado?.capacidad).toBe(cerrado?.usados);
+    const excepcion = await env.DB.prepare("SELECT COUNT(*) AS n FROM excepciones_dia WHERE agenda_id = 'GENERAL' AND fecha = ? AND tipo = 'BLOQUEO'").bind(origen).first<{ n: number }>();
+    expect(excepcion?.n).toBe(1);
     const pdf = await llamar(`/citas/${idMueve}/comprobante.pdf`, { sesion: operador });
     expect(pdf.status).toBe(200);
     expect(pdf.headers.get("content-type")).toContain("pdf");
@@ -312,6 +325,56 @@ describe("cupos desde ahora en America/Santiago", () => {
     expect(corte.status).toBe(200);
     const delBloque = (corte.json as { propuestas: { citaId: string; fecha: string; hora: string }[] }).propuestas;
     expect(delBloque.some((fila) => fila.citaId === idBloque && fila.fecha === diaLibre && fila.hora === "10:30")).toBe(true);
+    const abierto = await env.DB.prepare("SELECT capacidad, usados FROM cupos_bloque WHERE agenda_id = 'GENERAL' AND fecha = ? AND hora = '09:00'").bind(diaBloque).first<{ capacidad: number; usados: number }>();
+    expect(abierto).toEqual({ capacidad: 1, usados: 1 });
+    await env.DB.prepare("UPDATE cupos_bloque SET usados = capacidad WHERE agenda_id = 'GENERAL' AND fecha = ? AND hora = '10:30'").bind(diaLibre).run();
+    const lleno = await llamar("/config/cierre/confirmar", {
+      method: "POST", sesion: admin,
+      body: { agendaId: "GENERAL", fecha: diaBloque, hora: "09:00", movimientos: delBloque.filter((fila) => fila.citaId === idBloque) },
+    });
+    expect(lleno.status).toBe(409);
+    await env.DB.prepare("UPDATE cupos_bloque SET usados = 0 WHERE agenda_id = 'GENERAL' AND fecha = ? AND hora = '10:30'").bind(diaLibre).run();
+    const intacta = await env.DB.prepare("SELECT fecha, hora, estado FROM citas WHERE id = ?").bind(idBloque).first<{ fecha: string; hora: string; estado: string }>();
+    expect(intacta).toMatchObject({ fecha: diaBloque, hora: "09:00", estado: "AGENDADA" });
+    expect(await env.DB.prepare("SELECT capacidad FROM cupos_bloque WHERE agenda_id = 'GENERAL' AND fecha = ? AND hora = '09:00'").bind(diaBloque).first<{ capacidad: number }>()).toEqual({ capacidad: 1 });
+    const hecho = await llamar("/config/cierre/confirmar", {
+      method: "POST", sesion: admin,
+      body: { agendaId: "GENERAL", fecha: diaBloque, hora: "09:00", movimientos: delBloque.filter((fila) => fila.citaId === idBloque) },
+    });
+    expect(hecho.status).toBe(200);
+    const movidaBloque = await env.DB.prepare("SELECT fecha, hora FROM citas WHERE id = ?").bind(idBloque).first<{ fecha: string; hora: string }>();
+    expect(movidaBloque).toMatchObject({ fecha: diaLibre, hora: "10:30" });
+  });
+
+  it("cierra solo después de la gracia y cualquier día pasado abierto", async () => {
+    const hoy = "2026-11-25";
+    const ayer = sumarDias(hoy, -1);
+    const manana = sumarDias(hoy, 1);
+    async function agendada(fecha: string, hora: string) {
+      const ciudadano = crypto.randomUUID();
+      const cita = crypto.randomUUID();
+      const ahora = new Date().toISOString();
+      await env.DB.prepare("INSERT INTO ciudadanos (id, rut, nombres, apellidos, sin_correo, creado_at, actualizado_at) VALUES (?, ?, 'Nora', 'Prueba', 1, ?, ?)").bind(ciudadano, `${ciudadano.slice(0, 8)}`, ahora, ahora).run();
+      await env.DB.prepare(
+        `INSERT INTO citas (id, agenda_id, ciudadano_id, tipo_tramite_id, clases, fecha, hora, estado, es_sobrecupo, canal, declara_domicilio_recoleta, docs_requeridos, docs_cargados, creado_por, creado_at)
+         VALUES (?, 'GENERAL', ?, 'CONTROL_RENOVACION', '["B"]', ?, ?, 'AGENDADA', 0, 'PRESENCIAL', 1, 1, 0, 'demo', ?)`,
+      ).bind(cita, ciudadano, fecha, hora, ahora).run();
+      return cita;
+    }
+    const pasada = await agendada(ayer, "09:00");
+    const vigente = await agendada(hoy, "09:00");
+    const futura = await agendada(manana, "09:00");
+    await tareasProgramadas(env, instanteLocal(hoy, "14:20", ZONA));
+    const trasGraciaCorta = await env.DB.prepare("SELECT id, estado FROM citas WHERE id IN (?, ?, ?)").bind(pasada, vigente, futura).all<{ id: string; estado: string }>();
+    const mapa = Object.fromEntries(trasGraciaCorta.results.map((fila) => [fila.id, fila.estado]));
+    expect(mapa[pasada]).toBe("NO_ASISTIO");
+    expect(mapa[vigente]).toBe("AGENDADA");
+    expect(mapa[futura]).toBe("AGENDADA");
+    await tareasProgramadas(env, instanteLocal(hoy, "14:30", ZONA));
+    const despues = await env.DB.prepare("SELECT id, estado FROM citas WHERE id IN (?, ?)").bind(vigente, futura).all<{ id: string; estado: string }>();
+    const final = Object.fromEntries(despues.results.map((fila) => [fila.id, fila.estado]));
+    expect(final[vigente]).toBe("NO_ASISTIO");
+    expect(final[futura]).toBe("AGENDADA");
   });
 
   it("administración lista y guarda feriados", async () => {

@@ -26,7 +26,7 @@ import { armarCorreo, despachar, textoDocumentos } from "./servicios/correo";
 import { cuposDesdeAhora, diasLaborables, feriadosDelMes, libresPorDia } from "./servicios/disponibilidad";
 import { regenerarCupos } from "./servicios/generar";
 import { armarEstadisticas, filtroDe, listadoCitas, type Estadisticas, type FiltroEstadistica } from "./servicios/estadisticas";
-import { marcarInasistenciasVencidas, proponerTrasCierre } from "./servicios/jornada";
+import { cerrarJornadasAutomaticas, citasDelCierre, confirmarCierre, marcarInasistenciasVencidas, proponerTrasCierre } from "./servicios/jornada";
 import { armarPanel } from "./servicios/panel";
 import { libroXlsx, reportePdf } from "./exportar/documentos";
 import { candado, sala } from "./locks";
@@ -942,21 +942,39 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     const cuerpo = await leerJson(c.req.raw);
     const agenda = texto(cuerpo.agendaId, "La agenda", 3, 20);
     const fecha = texto(cuerpo.fecha, "La fecha", 10, 10);
-    const motivo = texto(cuerpo.motivo, "El motivo", 3, 200);
     if (!esAgenda(agenda) || !fechaValida(fecha)) throw new ErrorApp(400, "DATO_INVALIDO", "La agenda o la fecha no es válida.");
-    await c.env.DB.prepare(
-      `INSERT INTO excepciones_dia (id, agenda_id, fecha, tipo, motivo, creado_at) VALUES (?, ?, ?, 'BLOQUEO', ?, ?)`,
-    ).bind(crypto.randomUUID(), agenda, fecha, motivo, new Date().toISOString()).run();
-    await c.env.DB.prepare("UPDATE cupos_dia SET capacidad = usados WHERE agenda_id = ? AND fecha = ?").bind(agenda, fecha).run();
-    await c.env.DB.prepare("UPDATE cupos_bloque SET capacidad = usados WHERE agenda_id = ? AND fecha = ? AND usados < capacidad").bind(agenda, fecha).run();
-    const afectadas = await c.env.DB.prepare(
-      `SELECT c.id, c.hora, ci.nombres, ci.apellidos FROM citas c JOIN ciudadanos ci ON ci.id = c.ciudadano_id
-       WHERE c.agenda_id = ? AND c.fecha = ? AND c.estado = 'AGENDADA' ORDER BY c.hora`,
-    ).bind(agenda, fecha).all<{ id: string; hora: string; nombres: string; apellidos: string }>();
-    const citas = afectadas.results.map((fila) => ({ id: fila.id, hora: fila.hora, nombre: `${fila.apellidos}, ${fila.nombres}` }));
-    const propuestas = await proponerTrasCierre(c.env.DB, agenda, new Date(), citas);
-    await auditar(c.env.DB, { usuarioId: c.get("usuario").id, accion: "bloquear_dia", entidad: "cupo", despues: { agenda, fecha, motivo, citas: citas.length, propuestas: propuestas.length }, ip: ipDe(c.req.raw) });
+    const citas = await citasDelCierre(c.env.DB, agenda, fecha, null);
+    const propuestas = await proponerTrasCierre(c.env.DB, agenda, new Date(), citas, { fecha });
     return c.json({ citas, propuestas });
+  });
+
+  api.post("/config/cierre/confirmar", async (c) => {
+    if (!puedeBloquear(c.get("usuario").rol)) throw new ErrorApp(403, "SIN_PERMISO", "No puede cerrar la agenda.");
+    const cuerpo = await leerJson(c.req.raw);
+    const agenda = texto(cuerpo.agendaId, "La agenda", 3, 20);
+    const fecha = texto(cuerpo.fecha, "La fecha", 10, 10);
+    const hora = typeof cuerpo.hora === "string" && cuerpo.hora ? texto(cuerpo.hora, "La hora", 5, 5) : null;
+    const motivo = typeof cuerpo.motivo === "string" ? cuerpo.motivo.trim() : "";
+    if (!esAgenda(agenda) || !fechaValida(fecha)) throw new ErrorApp(400, "DATO_INVALIDO", "La agenda o la fecha no es válida.");
+    if (hora && !/^\d{2}:\d{2}$/.test(hora)) throw new ErrorApp(400, "DATO_INVALIDO", "La hora no es válida.");
+    if (!hora && motivo.length < 3) throw new ErrorApp(400, "DATO_INVALIDO", "El motivo del día es obligatorio.");
+    const movimientos = Array.isArray(cuerpo.movimientos) ? cuerpo.movimientos.filter(esObjeto).slice(0, 80).map((item) => ({
+      citaId: String(item.citaId ?? ""),
+      fecha: typeof item.fecha === "string" ? item.fecha : "",
+      hora: typeof item.hora === "string" ? item.hora : "",
+    })) : [];
+    const resultado = await confirmarCierre(c.env.DB, { agenda, fecha, hora, motivo, movimientos, usuarioId: c.get("usuario").id });
+    for (const mov of movimientos) {
+      const cita = await citaCompleta(c.env.DB, mov.citaId);
+      const tipo = cita ? await tipoPorId(c.env.DB, cita.tipo_tramite_id) : null;
+      if (cita?.email && tipo && cita.fecha === mov.fecha && cita.hora === mov.hora) {
+        const mensaje = await armarCorreo(c.env.DB, "REAGENDAMIENTO", { ...(await variablesCorreo(c.env, cita, tipo, mov.fecha, mov.hora)), fecha_anterior: formatearFecha(fecha) }, cita.id, cita.email);
+        if (mensaje) await despachar(c.env, mensaje);
+      }
+    }
+    await auditar(c.env.DB, { usuarioId: c.get("usuario").id, accion: hora ? "bloquear_bloque" : "bloquear_dia", entidad: "cupo", despues: { agenda, fecha, hora, motivo, reubicadas: resultado.reubicadas }, ip: ipDe(c.req.raw) });
+    await avisarOficina(c.env, { tipo: "agenda", agendaId: agenda, fecha });
+    return c.json(resultado);
   });
 
   api.post("/config/reubicar", async (c) => {
@@ -1041,17 +1059,8 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     const hora = texto(cuerpo.hora, "La hora", 5, 5);
     if (!esAgenda(agenda)) throw new ErrorApp(400, "DATO_INVALIDO", "La agenda no existe.");
     if (!fechaValida(fecha) || !/^\d{2}:\d{2}$/.test(hora)) throw new ErrorApp(400, "DATO_INVALIDO", "La fecha o la hora no es válida.");
-    await c.env.DB.prepare(
-      "UPDATE cupos_bloque SET capacidad = usados WHERE agenda_id = ? AND fecha = ? AND hora = ?",
-    ).bind(agenda, fecha, hora).run();
-    const afectadas = await c.env.DB.prepare(
-      `SELECT c.id, c.hora, ci.nombres, ci.apellidos FROM citas c JOIN ciudadanos ci ON ci.id = c.ciudadano_id
-       WHERE c.agenda_id = ? AND c.fecha = ? AND c.hora = ? AND c.estado = 'AGENDADA' ORDER BY ci.apellidos`,
-    ).bind(agenda, fecha, hora).all<{ id: string; hora: string; nombres: string; apellidos: string }>();
-    const citas = afectadas.results.map((fila) => ({ id: fila.id, hora: fila.hora, nombre: `${fila.apellidos}, ${fila.nombres}` }));
-    const propuestas = await proponerTrasCierre(c.env.DB, agenda, new Date(), citas);
-    await auditar(c.env.DB, { usuarioId: c.get("usuario").id, accion: "bloquear_bloque", entidad: "cupo", despues: { agenda, fecha, hora, citas: citas.length, propuestas: propuestas.length }, ip: ipDe(c.req.raw) });
-    await avisarOficina(c.env, { tipo: "agenda", agendaId: agenda, fecha });
+    const citas = await citasDelCierre(c.env.DB, agenda, fecha, hora);
+    const propuestas = await proponerTrasCierre(c.env.DB, agenda, new Date(), citas, { fecha, hora });
     return c.json({ citas, propuestas });
   });
 
@@ -1446,14 +1455,12 @@ export async function tareasProgramadas(env: Env, ahora = new Date()): Promise<v
   const zona = "America/Santiago";
   const partes = partesEnZona(ahora, zona);
   const parametros = await env.DB.prepare(
-    "SELECT clave, valor FROM parametros WHERE clave IN ('hora_cierre_automatico', 'hora_recordatorio', 'direccion_atencion')",
+    "SELECT clave, valor FROM parametros WHERE clave IN ('gracia_cierre_minutos', 'hora_recordatorio', 'direccion_atencion')",
   ).all<{ clave: string; valor: string }>();
   const mapa = Object.fromEntries(parametros.results.map((fila) => [fila.clave, fila.valor]));
-  const horaCierre = mapa.hora_cierre_automatico ?? "20:00";
+  const gracia = Number(mapa.gracia_cierre_minutos ?? "30");
   const horaRecordatorio = mapa.hora_recordatorio ?? "10:00";
-  if (partes.hora >= horaCierre) {
-    await marcarInasistenciasVencidas(env.DB, partes.fecha, ahora, null);
-  }
+  await cerrarJornadasAutomaticas(env.DB, ahora, Number.isFinite(gracia) ? gracia : 30);
   if (partes.hora !== horaRecordatorio) return;
   const citas = await env.DB.prepare(
     `SELECT c.id, c.fecha, c.hora, c.agenda_id, t.nombre AS tramite, t.requiere_carnet, t.requiere_licencia,
