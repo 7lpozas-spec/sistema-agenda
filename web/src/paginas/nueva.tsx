@@ -272,10 +272,10 @@ export function NuevaCita() {
     <div className="fixed inset-0 z-40 overflow-y-auto bg-[#141b2b]/55 px-3 py-6 sm:px-4 sm:py-10">
       <form
         onSubmit={enviar}
-        className="superficie mx-auto grid w-full max-w-xl gap-5 p-5 sm:p-7"
+        className="superficie booking-form mx-auto grid w-full max-w-2xl gap-5 p-5 sm:p-8"
       >
         <div className="flex items-start justify-between gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight">Nueva cita</h1>
+          <h1 className="page-title">Nueva cita</h1>
           <Link
             className="rounded-full px-3 py-1.5 text-sm text-muted hover:bg-paper hover:text-ink"
             to={volver}
@@ -290,7 +290,9 @@ export function NuevaCita() {
           className="grid gap-3 rounded-xl border border-line bg-paper p-4"
           disabled={guardando}
         >
-          <legend className="px-1 text-sm font-semibold">Persona</legend>
+          <legend className="px-1 text-sm font-semibold">
+            01 · Identificar persona
+          </legend>
           <div className="flex flex-wrap items-end gap-2">
             <div className="min-w-0 flex-1">
               <Campo id="rut" etiqueta="RUT">
@@ -340,6 +342,9 @@ export function NuevaCita() {
           ))}
         </fieldset>
         {error ? <Aviso>{error}</Aviso> : null}
+        <h2 className="form-section-title">
+          <span aria-hidden>02</span> Trámite y horario
+        </h2>
         <Campo id="tipo" etiqueta="Tipo de trámite">
           <select
             id="tipo"
@@ -426,7 +431,9 @@ export function NuevaCita() {
               ))}
           </div>
         </fieldset>
-        <h2 className="text-lg font-semibold">Datos de contacto</h2>
+        <h2 className="form-section-title">
+          <span aria-hidden>03</span> Datos de contacto
+        </h2>
         <div className="grid gap-3 sm:grid-cols-2">
           <Campo id="nombres" etiqueta="Nombres">
             <input
@@ -511,7 +518,7 @@ export function NuevaCita() {
             !tipo?.requiere_agenda ||
             !hora
           }
-          className="btn bg-pine text-white"
+          className="btn bg-sky text-white"
           aria-busy={guardando}
         >
           {guardando ? "Guardando reserva…" : "Confirmar reserva"}

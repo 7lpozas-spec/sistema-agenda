@@ -16,6 +16,17 @@ La vista diaria muestra los cupos disponibles aunque el bloque ya tenga personas
 
 No se incorporan dependencias de producción ni migraciones de base de datos.
 
+## Diseño visual
+
+- Paleta azul marino y azul de acción, fondos claros, superficies blancas, bordes suaves e iconos consistentes.
+- Navegación con sección activa visible; ingreso, panel principal y reserva comparten la misma jerarquía visual.
+- Agenda diaria compacta, con nombre, trámite, estado y cupos visibles. Los nombres largos pueden ocupar más de una línea.
+- Formulario organizado en identificación, trámite/horario y contacto, sin añadir pasos de navegación.
+- Adaptación móvil con controles táctiles y detalle de cita sobre la lista; panel lateral fijo en escritorio.
+- Se mantienen los flujos operativos de esta variante, permisos y validaciones del servidor.
+
+Verificación del rediseño: TypeScript, compilación y ambos recorridos de navegador correctos. Revisión de ingreso, panel y agenda en móvil; agenda sin desborde horizontal a 320, 768, 1280 y 1440 px. La primera fila de muestra en escritorio mide 84 px (varía según contenido). Capturas revisadas con datos ficticios.
+
 ## Validación
 
 ```bash

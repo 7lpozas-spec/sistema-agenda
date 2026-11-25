@@ -44,7 +44,7 @@ export function Campo({ id, etiqueta, ayuda, children }: { id: string; etiqueta:
 }
 
 export const claseCampo =
-  "h-10 w-full rounded-lg border border-line bg-white px-3 text-sm text-ink transition-colors outline-none hover:border-[#cfc6ba] focus:border-sky disabled:bg-paper disabled:text-muted";
+  "h-10 w-full rounded-lg border border-line bg-white px-3 text-sm text-ink transition-colors outline-none hover:border-[#b8c8dd] focus:border-sky disabled:bg-paper disabled:text-muted";
 
 export function Boton({
   children,
@@ -99,7 +99,7 @@ export function Estado({ valor }: { valor: string }) {
 
 export function tonoEstado(valor: string): string {
   if (valor === "ASISTIO") return "bg-[#e5f6ec] text-[#146c43]";
-  if (valor === "NO_ASISTIO") return "bg-[#f3efe9] text-[#7a726a]";
+  if (valor === "NO_ASISTIO") return "bg-[#eef1f5] text-[#586a80]";
   if (valor === "ATRASADO") return "bg-[#fff1dc] text-[#9a5b00]";
   if (valor === "CANCELADA" || valor === "ANULADA") return "bg-[#f8e8e6] text-alert";
   return "bg-[#e7eefc] text-[#1e3a8a]";

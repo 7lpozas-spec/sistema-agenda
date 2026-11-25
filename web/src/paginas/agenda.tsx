@@ -1,3 +1,4 @@
+import { CalendarDays, Plus, Search, PanelRightOpen } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, fechaHoy, fechaHumana } from "../api";
@@ -186,16 +187,17 @@ export function Agenda() {
     <section className="grid gap-5">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-semibold">{titulo}</h1>
+          <p className="page-eyebrow">Licencias de conducir / Programación</p>
+          <h1 className="page-title">{titulo}</h1>
           <p className="mt-1 text-sm text-muted">{fechaHumana(fecha)}</p>
         </div>
         {puedeReservar ? (
           <Link className="btn bg-sky text-white" to={nueva()}>
-            + Nueva cita
+            <Plus size={16} aria-hidden /> Nueva cita
           </Link>
         ) : null}
       </div>
-      <div className="flex flex-wrap items-end justify-between gap-3">
+      <div className="agenda-toolbar flex flex-wrap items-end justify-between gap-3">
         <div className="flex flex-wrap items-end gap-2">
           <Fecha
             id="fecha-agenda"
@@ -327,7 +329,9 @@ export function Agenda() {
               <tbody>
                 {horas.map((h) => (
                   <tr key={h} className="border-t border-line">
-                    <th scope="row" className="p-3 font-medium">{h}</th>
+                    <th scope="row" className="p-3 font-medium">
+                      {h}
+                    </th>
                     {dias.map((d) => {
                       const b = d.bloques.find((b) => b.hora === h);
                       const personas = d.citas.filter((c) => c.hora === h);
@@ -365,10 +369,15 @@ export function Agenda() {
       {vista === "dia" ? (
         <>
           <div className="flex flex-wrap gap-3">
-            <label className="min-w-0 flex-1">
+            <label className="relative min-w-[180px] flex-1">
+              <Search
+                size={16}
+                className="pointer-events-none absolute left-3 top-3.5 text-muted"
+                aria-hidden
+              />
               <span className="sr-only">Buscar en el día</span>
               <input
-                className={`${control} w-full`}
+                className={`${control} w-full pl-10`}
                 placeholder="Buscar por nombre, trámite u hora…"
                 value={consulta}
                 onChange={(e) => setConsulta(e.target.value)}
@@ -393,10 +402,13 @@ export function Agenda() {
             <Vacio texto="Sin bloques habilitados para este día" />
           ) : null}
           {!cargando && !error && bloques.length > 0 ? (
-            <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_19rem]">
+            <div className="agenda-columns">
               <div className="superficie min-w-0 overflow-hidden">
                 <div className="flex flex-wrap justify-between gap-2 border-b border-line px-4 py-3 text-sm">
-                  <h2 className="font-semibold">Jornada del día</h2>
+                  <h2 className="flex items-center gap-2 font-semibold">
+                    <CalendarDays size={16} className="text-sky" aria-hidden />{" "}
+                    Jornada del día
+                  </h2>
                   <span className="text-muted" aria-live="polite">
                     {citas.length} citas ·{" "}
                     {bloques.reduce(
@@ -416,15 +428,15 @@ export function Agenda() {
                   const personas = filtradas.filter((c) => c.hora === b.hora);
                   if (hayFiltro && !personas.length) return null;
                   return (
-                    <div
-                      key={b.hora}
-                      className="grid grid-cols-[3.5rem_minmax(0,1fr)] gap-2 border-b border-line p-3 last:border-b-0"
-                    >
-                      <div className="pt-2 text-sm font-medium tabular-nums">
-                        {b.hora}
+                    <div key={b.hora} className="agenda-row">
+                      <div className="agenda-time">
+                        <span>{b.hora}</span>
+                        <small>
+                          {b.usados}/{b.capacidad}
+                        </small>
                       </div>
                       <div className="min-w-0">
-                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        <div className="agenda-slots">
                           {personas.map((c) => (
                             <button
                               type="button"
@@ -436,15 +448,18 @@ export function Agenda() {
                                   panel.current?.focus(),
                                 );
                               }}
-                              className={`min-w-0 rounded-lg border p-3 text-left ${c.id === seleccionada ? "border-sky bg-[#edf2fd] ring-1 ring-sky" : "border-line bg-white hover:border-sky"}`}
+                              className="appointment"
+                              data-state={c.estado}
                             >
-                              <span className="block break-words text-sm font-semibold">
-                                {c.nombre}
+                              <span className="appointment-top">
+                                <span className="appointment-name">
+                                  {c.nombre}
+                                </span>
+                                <Estado valor={c.estado} />
                               </span>
-                              <span className="my-1.5 block text-xs text-muted">
+                              <span className="appointment-type">
                                 {c.tramite}
                               </span>
-                              <Estado valor={c.estado} />
                             </button>
                           ))}
                           {puedeReservar &&
@@ -453,15 +468,20 @@ export function Agenda() {
                           !hayFiltro ? (
                             <Link
                               aria-label={`Reservar ${b.hora}`}
-                              className="flex min-h-16 items-center justify-center rounded-lg border border-dashed border-[#b9c7e7] bg-[#f5f7fc] px-3 py-3 text-sm font-medium text-sky hover:bg-[#edf2fd]"
+                              className="slot-reserve"
                               to={nueva(b.hora)}
                             >
-                              + Reservar · {libres}{" "}
-                              {libres === 1 ? "cupo" : "cupos"}
+                              <span className="flex items-center gap-1">
+                                <Plus size={14} aria-hidden /> Reservar
+                              </span>
+                              <small>
+                                {libres}{" "}
+                                {libres === 1 ? "cupo libre" : "cupos libres"}
+                              </small>
                             </Link>
                           ) : null}
                         </div>
-                        <p className="mt-2 text-xs text-muted">
+                        <p className="sr-only">
                           {b.usados} de {b.capacidad} ocupados ·{" "}
                           {libres ? `${libres} disponibles` : "Completo"}
                         </p>
@@ -474,7 +494,8 @@ export function Agenda() {
                 ref={panel}
                 tabIndex={-1}
                 aria-label="Detalle de la cita"
-                className="superficie order-first p-5 xl:sticky xl:top-28 xl:order-last"
+                className="superficie detail-panel"
+                data-selected={Boolean(elegida)}
               >
                 {elegida ? (
                   <>
@@ -490,6 +511,13 @@ export function Agenda() {
                       >
                         ×
                       </button>
+                    </div>
+                    <div className="detail-avatar" aria-hidden>
+                      {elegida.nombre
+                        .split(",")
+                        .reverse()
+                        .map((n) => n.trim()[0])
+                        .join("")}
                     </div>
                     <h2 className="mt-3 break-words text-xl font-semibold">
                       {elegida.nombre}
@@ -571,9 +599,12 @@ export function Agenda() {
                   </>
                 ) : (
                   <>
-                    <h2 className="text-lg font-semibold">
-                      Detalle de la cita
-                    </h2>
+                    <div className="detail-empty">
+                      <PanelRightOpen aria-hidden />
+                      <h2 className="text-lg font-semibold">
+                        Detalle de la cita
+                      </h2>
+                    </div>
                     <p className="mt-2 text-sm text-muted">
                       Seleccione una persona para ver su ficha y gestionar la
                       atención sin salir de la agenda.
