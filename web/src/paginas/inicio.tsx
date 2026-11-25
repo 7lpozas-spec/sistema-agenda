@@ -173,10 +173,10 @@ function Recepcion({ panel }: { panel: Panel }) {
           <p className="text-sm font-semibold">Por hora</p>
           <ul className="mt-2 grid gap-1">
             {panel.flujo.map((fila) => (
-              <li key={fila.hora} className="grid grid-cols-[3.2rem_minmax(0,1fr)_2rem] items-center gap-2 text-sm">
+              <li key={fila.hora} className="grid grid-cols-[3.2rem_minmax(0,1fr)_3.2rem] items-center gap-2 text-sm">
                 <span className="tabular-nums">{fila.hora}</span>
-                <span className="h-2 rounded bg-[#d9e4ff]" style={{ width: `${Math.round((fila.llegaron / maximo) * 100)}%` }} />
-                <span className="tabular-nums">{fila.llegaron}</span>
+                <span className="h-2 rounded bg-[#d9e4ff]" style={{ width: `${Math.max(8, Math.round((fila.citados / maximo) * 100))}%` }} />
+                <span className="tabular-nums">{fila.llegaron}/{fila.citados}</span>
               </li>
             ))}
           </ul>
