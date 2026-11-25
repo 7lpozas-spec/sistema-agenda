@@ -253,11 +253,12 @@ export function NuevaCita() {
         <section className="superficie grid w-full max-w-md gap-4 p-6">
           <h1 className="text-2xl font-semibold">Cita agendada</h1>
           <p className="text-sm text-muted">
-            {nombres} {apellidos} · {fecha} · {hora}
+            {nombres} {apellidos} · {fecha.split("-").reverse().join("-")} · {hora}
           </p>
           {avisoPersona.includes("inasistencias") ? (
             <Aviso tono="info">{avisoPersona}</Aviso>
           ) : null}
+          <a className="btn border border-line bg-white" href={`/api/citas/${creada}/comprobante.pdf`} target="_blank" rel="noreferrer">Comprobante PDF</a>
           <Link className="btn border border-line bg-white" to={volver}>
             Volver a la agenda
           </Link>

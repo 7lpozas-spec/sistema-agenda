@@ -23,6 +23,9 @@ interface Cita {
   clases?: string;
   email?: string | null;
   telefono?: string | null;
+  atencion_at?: string | null;
+  documentosTexto?: string;
+  direccion?: string;
 }
 interface Otra { id: string; fecha: string; hora: string; estado: string; tramite: string }
 interface Hueco { fecha: string; hora: string; libres: number }
@@ -156,22 +159,29 @@ export function CitaDetalle() {
             <h1 className="text-[26px] font-semibold tracking-tight">{cita.nombres} {cita.apellidos}</h1>
             <p className="mt-1 text-sm text-muted">{cita.rutVisible ?? cita.rut}</p>
           </div>
-          <Estado valor={cita.estado} />
-          <button type="button" className="btn border border-line bg-white" onClick={() => window.print()}>Imprimir</button>
+          <div className="flex flex-wrap gap-2">
+            <Estado valor={cita.estado} />
+            <button type="button" className="btn border border-line bg-white" onClick={() => window.print()}>Imprimir</button>
+            <a className="btn border border-line bg-white" href={`/api/citas/${cita.id}/comprobante.pdf`} target="_blank" rel="noreferrer">PDF</a>
+          </div>
         </div>
         <section className="comprobante">
-          <p>Municipalidad de Recoleta</p>
+          <p>Municipalidad de Recoleta · Dirección de Tránsito</p>
           <p>{cita.nombres} {cita.apellidos}</p>
           <p>{cita.rutVisible ?? cita.rut}</p>
           <p>{fechaHumana(cita.fecha)} · {cita.hora}</p>
           <p>{cita.tramite ?? ""}</p>
           <p>{cita.agenda_id === "PRIMERA_VEZ" ? "Primera vez" : "General"}</p>
+          <p>Documentos: {cita.documentosTexto ?? "cédula de identidad"}</p>
+          {cita.direccion ? <p>{cita.direccion}</p> : null}
         </section>
         <p className="text-lg font-medium">{fechaHumana(cita.fecha)} · {cita.hora}</p>
         <dl className="grid gap-2 text-sm sm:grid-cols-2">
           <div><dt className="text-muted">Trámite</dt><dd className="font-medium">{cita.tramite ?? "—"}</dd></div>
           <div><dt className="text-muted">Clases</dt><dd className="font-medium">{clasesDe(cita.clases)}</dd></div>
           <div><dt className="text-muted">Agenda</dt><dd className="font-medium">{cita.agenda_id === "PRIMERA_VEZ" ? "Primera vez" : "General"}{cita.resultado ? ` · ${cita.resultado === "APROBADO" ? "Aprobado" : "Reprobado"}` : ""}</dd></div>
+          <div><dt className="text-muted">Documentos</dt><dd className="font-medium">{cita.documentosTexto ?? "cédula de identidad"}</dd></div>
+          {cita.direccion ? <div><dt className="text-muted">Dirección</dt><dd className="font-medium">{cita.direccion}</dd></div> : null}
           {cita.email ? <div><dt className="text-muted">Correo</dt><dd className="font-medium">{cita.email}</dd></div> : null}
           {cita.telefono ? <div><dt className="text-muted">Teléfono</dt><dd className="font-medium">{cita.telefono}</dd></div> : null}
         </dl>
@@ -183,8 +193,13 @@ export function CitaDetalle() {
             <button type="button" className="h-11 rounded-lg border border-line px-4 text-sm font-semibold" onClick={() => void asistencia("NO_ASISTIO")}>No asistió</button>
           </div>
         ) : null}
-        {puedeAsistencia && (cita.estado === "ASISTIO" || cita.estado === "ATRASADO") ? (
-          <button type="button" className="h-11 justify-self-start rounded-lg border border-line px-4 text-sm font-semibold" onClick={() => void asistencia("AGENDADA")}>Deshacer llegada</button>
+        {puedeAsistencia && (cita.estado === "ASISTIO" || cita.estado === "ATRASADO" || cita.estado === "NO_ASISTIO") ? (
+          <div className="flex flex-wrap gap-2">
+            {(cita.estado === "ASISTIO" || cita.estado === "ATRASADO") && !cita.atencion_at ? (
+              <button type="button" className="h-11 rounded-lg bg-pine px-4 text-sm font-semibold text-white" onClick={() => void api(`/api/citas/${id}/atencion`, { method: "POST", body: {} }).then(() => cargar()).catch((falla: unknown) => setError(falla instanceof Error ? falla.message : "No se pudo marcar."))}>Atendido</button>
+            ) : null}
+            <button type="button" className="h-11 rounded-lg border border-line px-4 text-sm font-semibold" onClick={() => void asistencia("AGENDADA")}>{cita.estado === "NO_ASISTIO" ? "Deshacer" : "Deshacer llegada"}</button>
+          </div>
         ) : null}
         {instructor && cita.agenda_id === "PRIMERA_VEZ" ? (
           <div className="flex flex-wrap gap-2">

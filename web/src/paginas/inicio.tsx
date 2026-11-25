@@ -166,7 +166,7 @@ function Recepcion({ panel }: { panel: Panel }) {
         <article className="superficie p-4">
           <p className="text-sm font-semibold">Período</p>
           <p className="mt-2 text-sm tabular-nums">{panel.periodo.llegaron} llegaron · {panel.periodo.aTiempo} a tiempo · {panel.periodo.atrasados} atrasos · {panel.periodo.inasistencias} inasistencias</p>
-          <p className="mt-1 text-xs text-muted">{delta(panel.periodo.llegaron, panel.periodo.anterior.llegaron)} llegaron</p>
+          <p className="mt-1 text-xs"><Delta actual={panel.periodo.llegaron} antes={panel.periodo.anterior.llegaron} /> llegaron</p>
           {panel.periodo.esperaMin !== null ? <p className="mt-2 text-sm tabular-nums">Espera {panel.periodo.esperaMin} min</p> : null}
         </article>
         <article className="superficie p-4">
@@ -213,20 +213,20 @@ function Tarjeta({ agenda, nombre, hueco, grande, puedeAgendar }: { agenda: stri
 
 function KpiFila({ kpis }: { kpis: Kpis }) {
   const filas = [
-    ["Agendadas", kpis.total, kpis.anterior.total],
-    ["Asistencia", kpis.asistieron, kpis.anterior.asistieron],
-    ["Tasa", kpis.tasa === null ? "—" : `${kpis.tasa}%`, kpis.anterior.tasa],
-    ["Inasistencias", kpis.noAsistieron, kpis.anterior.noAsistieron],
-    ["Atrasos", kpis.atrasados, kpis.anterior.atrasados],
-    ["Cancelaciones", kpis.canceladas, kpis.anterior.canceladas],
+    ["Agendadas", kpis.total, kpis.total, kpis.anterior.total],
+    ["Asistencia", kpis.asistieron, kpis.asistieron, kpis.anterior.asistieron],
+    ["Tasa", kpis.tasa === null ? "—" : `${kpis.tasa}%`, kpis.tasa, kpis.anterior.tasa],
+    ["Inasistencias", kpis.noAsistieron, kpis.noAsistieron, kpis.anterior.noAsistieron],
+    ["Atrasos", kpis.atrasados, kpis.atrasados, kpis.anterior.atrasados],
+    ["Cancelaciones", kpis.canceladas, kpis.canceladas, kpis.anterior.canceladas],
   ] as const;
   return (
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-      {filas.map(([etiqueta, valor, antes]) => (
+      {filas.map(([etiqueta, valor, comparado, antes]) => (
         <article key={etiqueta} className="superficie px-4 py-3">
           <p className="text-xs font-medium text-muted">{etiqueta}</p>
           <p className="mt-1 text-2xl font-semibold tabular-nums">{valor}</p>
-          <p className="mt-1 text-xs text-muted">{typeof valor === "number" && typeof antes === "number" ? delta(valor, antes) : ""}</p>
+          <p className="mt-1 text-xs">{typeof antes === "number" && typeof comparado === "number" ? <Delta actual={comparado} antes={antes} subeEsBueno={etiqueta !== "Inasistencias" && etiqueta !== "Atrasos" && etiqueta !== "Cancelaciones"} /> : null}</p>
         </article>
       ))}
     </div>
@@ -250,10 +250,10 @@ function Actividad({ panel }: { panel: Panel }) {
               <tr key={`${fila.nombre}-${fila.agenda}`} className="border-b border-line">
                 <td className="p-3">{fila.nombre}</td>
                 <td className="p-3">{fila.agenda === "PRIMERA_VEZ" ? "Primera vez" : "General"}</td>
-                <td className="p-3 tabular-nums">{fila.creadas} <span className="text-xs text-muted">{delta(fila.creadas, fila.anterior.creadas)}</span></td>
-                <td className="p-3 tabular-nums">{fila.reagendadas}</td>
-                <td className="p-3 tabular-nums">{fila.canceladas}</td>
-                <td className="p-3 tabular-nums">{fila.asistencias} <span className="text-xs text-muted">{delta(fila.asistencias, fila.anterior.asistencias)}</span></td>
+                <td className="p-3 tabular-nums">{fila.creadas} <Delta actual={fila.creadas} antes={fila.anterior.creadas} /></td>
+                <td className="p-3 tabular-nums">{fila.reagendadas} <Delta actual={fila.reagendadas} antes={fila.anterior.reagendadas} /></td>
+                <td className="p-3 tabular-nums">{fila.canceladas} <Delta actual={fila.canceladas} antes={fila.anterior.canceladas} subeEsBueno={false} /></td>
+                <td className="p-3 tabular-nums">{fila.asistencias} <Delta actual={fila.asistencias} antes={fila.anterior.asistencias} /></td>
               </tr>
             ))}
           </tbody>
@@ -333,9 +333,17 @@ function Calendario({ nombre, mes, dias, laborables, feriados, onMes }: { nombre
   );
 }
 
-function delta(actual: number, antes: number): string {
+function Delta({ actual, antes, subeEsBueno = true }: { actual: number; antes: number; subeEsBueno?: boolean }) {
   const n = actual - antes;
-  return `${n >= 0 ? "+" : ""}${n}`;
+  const favorable = subeEsBueno ? n >= 0 : n <= 0;
+  const flecha = n > 0 ? "↑" : n < 0 ? "↓" : "·";
+  const titulo = `Período anterior: ${antes}`;
+  return (
+    <span tabIndex={0} title={titulo} className={`group relative cursor-help text-xs font-semibold ${favorable ? "text-[#146c43]" : "text-alert"}`}>
+      {flecha} {Math.abs(n)}
+      <span role="tooltip" className="pointer-events-none absolute bottom-full left-0 z-20 mb-1 hidden whitespace-nowrap rounded bg-[#1e283c] px-2 py-1 text-[11px] font-medium text-white group-hover:block group-focus:block">{titulo}</span>
+    </span>
+  );
 }
 function sumar(iso: string, dias: number): string {
   const [anio, mes, dia] = iso.split("-").map(Number);

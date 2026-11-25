@@ -1,10 +1,11 @@
 import { CalendarDays, Plus, Search } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { bloquePosterior } from "../../../src/domain/tiempo";
 import { api, fechaHoy, fechaHumana } from "../api";
 import { Fecha, diaSemanaIso, grillaLaborable } from "../fecha";
 import { useAuth } from "../auth";
+import { Ayuda, useAtajos } from "../atajos";
 import { Aviso, Esqueleto, Estado, Vacio, avisar } from "../ui";
 import { useVivo } from "../vivo";
 
@@ -204,6 +205,20 @@ export function Agenda() {
     setSolicitud({ cita, hora });
     dialogo.current?.showModal();
   }
+  const ayudaAgenda = useMemo(() => [
+    { tecla: "N", accion: "Nueva cita" },
+    { tecla: "← →", accion: "Día" },
+    { tecla: "H", accion: "Hoy" },
+    { tecla: "?", accion: "Esta ayuda" },
+  ], []);
+  const atajosAgenda = useAtajos(useMemo(() => ({
+    n: () => { if (puedeReservar) window.location.assign(nueva()); },
+    N: () => { if (puedeReservar) window.location.assign(nueva()); },
+    ArrowLeft: () => navegar(sumar(fecha, -1)),
+    ArrowRight: () => navegar(sumar(fecha, 1)),
+    h: () => navegar(fechaHoy(), "dia"),
+    H: () => navegar(fechaHoy(), "dia"),
+  }), [fecha, puedeReservar]), ayudaAgenda);
 
   return (
     <section className="grid gap-5">
@@ -636,6 +651,7 @@ export function Agenda() {
           </dialog>
         </>
       ) : null}
+      <Ayuda abierta={atajosAgenda.abierta} ayuda={ayudaAgenda} onCerrar={atajosAgenda.cerrar} />
     </section>
   );
 }

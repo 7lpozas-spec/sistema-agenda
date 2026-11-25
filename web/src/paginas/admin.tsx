@@ -1,6 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
-import { api, fechaHoy } from "../api";
+import { api } from "../api";
 import { useAuth } from "../auth";
 import { Fecha } from "../fecha";
 import { Aviso, Boton, Campo, Cargando, Vacio, claseCampo } from "../ui";
@@ -222,7 +221,7 @@ function ClaveCuenta({ usuarios }: { usuarios: Usuario[] }) {
         </select>
       </Campo>
       <Campo id="nueva-clave" etiqueta="Clave" ayuda="Mínimo 12 caracteres, con mayúscula, minúscula y número.">
-        <input id="nueva-clave" className={claseCampo} type="text" value={clave} onChange={(e) => setClave(e.target.value)} required />
+        <input id="nueva-clave" className={claseCampo} type="password" autoComplete="new-password" value={clave} onChange={(e) => setClave(e.target.value)} required />
       </Campo>
       <Boton>Guardar clave</Boton>
     </form>
@@ -235,7 +234,12 @@ function Feriados() {
   const [nombre, setNombre] = useState("");
   const [error, setError] = useState("");
   function cargar() {
-    void api<{ feriados: Feriado[] }>("/api/feriados").then((datos) => setFilas(datos.feriados));
+    void api<{ feriados: Feriado[] }>("/api/feriados")
+      .then((datos) => setFilas(datos.feriados))
+      .catch((falla: unknown) => {
+        setFilas([]);
+        setError(falla instanceof Error ? falla.message : "No se pudieron leer los feriados.");
+      });
   }
   useEffect(cargar, []);
   async function agregar(evento: FormEvent) {
@@ -267,44 +271,96 @@ function Feriados() {
   );
 }
 
+interface Propuesta { citaId: string; nombre: string; horaActual: string; fecha: string; hora: string }
+interface Afectada { id: string; hora: string; nombre: string }
+
 function Cierre() {
   const [agenda, setAgenda] = useState("GENERAL");
   const [fecha, setFecha] = useState("");
+  const [hora, setHora] = useState("");
   const [motivo, setMotivo] = useState("");
-  const [citas, setCitas] = useState<{ id: string; hora: string; nombre: string }[]>([]);
+  const [propuestas, setPropuestas] = useState<Propuesta[]>([]);
+  const [sinCupo, setSinCupo] = useState<Afectada[]>([]);
   const [error, setError] = useState("");
+  const [aviso, setAviso] = useState("");
+  function aplicar(citas: Afectada[], lista: Propuesta[]) {
+    const asignadas = new Set(lista.map((fila) => fila.citaId));
+    setPropuestas(lista);
+    setSinCupo(citas.filter((fila) => !asignadas.has(fila.id)));
+  }
   async function cerrar(evento: FormEvent) {
     evento.preventDefault();
     setError("");
+    setAviso("");
     try {
-      const respuesta = await api<{ citas: { id: string; hora: string; nombre: string }[] }>("/api/config/bloquear-dia", { method: "POST", body: { agendaId: agenda, fecha, motivo } });
-      setCitas(respuesta.citas);
+      const respuesta = await api<{ citas: Afectada[]; propuestas: Propuesta[] }>("/api/config/bloquear-dia", { method: "POST", body: { agendaId: agenda, fecha, motivo } });
+      aplicar(respuesta.citas, respuesta.propuestas);
       setMotivo("");
     } catch (falla) {
       setError(falla instanceof Error ? falla.message : "No se pudo cerrar el día.");
     }
   }
+  async function cerrarBloque() {
+    setError("");
+    setAviso("");
+    if (!/^\d{2}:\d{2}$/.test(hora)) {
+      setError("Indique la hora del bloque.");
+      return;
+    }
+    try {
+      const respuesta = await api<{ citas: Afectada[]; propuestas: Propuesta[] }>("/api/bloques/bloquear", { method: "POST", body: { agendaId: agenda, fecha, hora } });
+      aplicar(respuesta.citas, respuesta.propuestas);
+    } catch (falla) {
+      setError(falla instanceof Error ? falla.message : "No se pudo cerrar el bloque.");
+    }
+  }
+  async function confirmar() {
+    setError("");
+    setAviso("");
+    try {
+      let hechas = 0;
+      for (let i = 0; i < propuestas.length; i += 40) {
+        const lote = propuestas.slice(i, i + 40);
+        const respuesta = await api<{ reubicadas: number }>("/api/config/reubicar", { method: "POST", body: { movimientos: lote.map((fila) => ({ citaId: fila.citaId, fecha: fila.fecha, hora: fila.hora })) } });
+        hechas += respuesta.reubicadas;
+      }
+      setPropuestas([]);
+      if (hechas === 0) setError("No quedó ninguna cita reubicada.");
+      else setAviso(`Reubicadas: ${hechas}`);
+    } catch (falla) {
+      setError(falla instanceof Error ? falla.message : "No se pudo reubicar.");
+    }
+  }
   return (
     <form onSubmit={cerrar} className="grid gap-3 border border-line p-3">
-      <h2 className="text-sm font-semibold">Cierre</h2>
+      <h2 className="text-sm font-semibold">Cierre de día o bloque</h2>
       {error ? <Aviso>{error}</Aviso> : null}
+      {aviso ? <p className="text-sm font-medium text-[#146c43]">{aviso}</p> : null}
       <select className={claseCampo} value={agenda} onChange={(e) => setAgenda(e.target.value)} aria-label="Agenda del cierre">
         <option value="GENERAL">General</option>
         <option value="PRIMERA_VEZ">Primera vez</option>
       </select>
       <Fecha id="cierre-fecha" etiqueta="Fecha" valor={fecha} alCambiar={setFecha} />
-      <Campo id="cierre-motivo" etiqueta="Motivo"><input id="cierre-motivo" className={claseCampo} value={motivo} onChange={(e) => setMotivo(e.target.value)} required /></Campo>
-      <Boton>Bloquear día</Boton>
-      <ul className="grid gap-1 text-sm">
-        {citas.map((cita) => <li key={cita.id}><Link className="text-sky underline" to={`/citas/${cita.id}`}>{cita.hora} {cita.nombre}</Link></li>)}
-      </ul>
+      <Campo id="cierre-hora" etiqueta="Hora del bloque"><input id="cierre-hora" className={claseCampo} inputMode="numeric" pattern="[0-2][0-9]:[0-5][0-9]" placeholder="09:00" value={hora} onChange={(e) => setHora(e.target.value)} /></Campo>
+      <Campo id="cierre-motivo" etiqueta="Motivo del día"><input id="cierre-motivo" className={claseCampo} value={motivo} onChange={(e) => setMotivo(e.target.value)} required /></Campo>
+      <div className="flex flex-wrap gap-2">
+        <Boton>Bloquear día</Boton>
+        <button type="button" className="btn border border-line bg-white" onClick={() => void cerrarBloque()}>Bloquear bloque</button>
+      </div>
+      {propuestas.length > 0 || sinCupo.length > 0 ? (
+        <div className="grid gap-2">
+          <ul className="grid gap-1 text-sm">
+            {propuestas.map((fila) => <li key={fila.citaId}>{fila.horaActual} {fila.nombre} → {fila.fecha.slice(8)}-{fila.fecha.slice(5, 7)} {fila.hora}</li>)}
+            {sinCupo.map((fila) => <li key={fila.id} className="text-alert">{fila.hora} {fila.nombre} · sin cupo</li>)}
+          </ul>
+          {propuestas.length > 0 ? <button type="button" className="btn bg-sky text-white" onClick={() => void confirmar()}>Confirmar reubicación</button> : null}
+        </div>
+      ) : null}
     </form>
   );
 }
 
 function Cupos() {
-  const [desde, setDesde] = useState(fechaHoy());
-  const [hasta, setHasta] = useState(fechaHoy());
   const [error, setError] = useState("");
   async function generar(evento: FormEvent) {
     evento.preventDefault();
@@ -324,8 +380,6 @@ function Cupos() {
   return (
     <form onSubmit={generar} className="grid max-w-xl gap-3">
       {error ? <Aviso>{error}</Aviso> : null}
-      <Fecha id="desde-cupo" etiqueta="Desde" valor={desde} alCambiar={setDesde} />
-      <Fecha id="hasta-cupo" etiqueta="Hasta" valor={hasta} alCambiar={setHasta} />
       <Boton>Generar cupos vacíos</Boton>
     </form>
   );
