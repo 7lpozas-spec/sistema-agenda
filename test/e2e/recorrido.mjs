@@ -72,7 +72,7 @@ try {
 
   await entrar(page, "operador@ejemplo.cl", clave("LICENCIAS_CLAVE_OPERADOR"));
   await page.getByRole("heading", { name: "Dashboard" }).waitFor();
-  assert.equal(await page.getByRole("link", { name: "Hoy" }).count(), 0);
+  assert.equal(await page.getByRole("link", { name: "Hoy", exact: true }).count(), 0);
   assert.equal(await page.getByRole("link", { name: "Atención", exact: true }).count(), 0);
   assert.equal(await page.getByRole("link", { name: "Sin hora" }).count(), 0);
   await page.screenshot({ path: `${salida}/03-inicio.png`, fullPage: true });
@@ -147,14 +147,32 @@ try {
   await cel.getByRole("heading", { name: "Dashboard" }).waitFor();
   await cel.screenshot({ path: `${salida}/14-movil-lista.png`, fullPage: false });
   await cel.goto(`${base}/citas/${creada.cita.id}`);
-  await cel.getByRole("button", { name: "Cámara" }).click();
+  await cel.getByRole("button", { name: "Fotografiar Carnet, frente" }).click();
   await cel.getByRole("button", { name: "Capturar" }).waitFor();
+  await cel.waitForTimeout(800);
   await cel.screenshot({ path: `${salida}/15-movil-camara.png`, fullPage: false });
-  await cel.getByRole("button", { name: "Cerrar" }).click();
-  await cel.getByRole("tab", { name: "Cédula" }).click();
-  const jpeg = Buffer.from("/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBAQEBAPDw8PDw8PDw8PDw8PDw8PFREWFhURFRUYHSggGBolGxUVITEhJSkrLi4uFx8zODMtNygtLisBCgoKDg0OGhAQGy0lHyUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBIgACEQEDEQH/xAAbAAABBQEBAAAAAAAAAAAAAAAFAgMEBgcBAAr/xAAVAQEBAAAAAAAAAAAAAAAAAAABAv/EABUBAQEAAAAAAAAAAAAAAAAAAAAB/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8AnQB//9k=", "base64");
-  await cel.getByLabel("Archivo").setInputFiles({ name: "cedula.jpg", mimeType: "image/jpeg", buffer: jpeg });
-  await page.getByRole("img", { name: "Cédula" }).waitFor();
+  await cel.getByRole("button", { name: "Capturar" }).click();
+  await cel.getByRole("button", { name: "Usar foto" }).click();
+  await page.getByRole("img", { name: "Carnet, frente" }).waitFor();
+  assert.equal(await page.getByRole("link", { name: "Comprobante" }).count(), 0);
+  const jpeg = Buffer.from((await cel.evaluate(() => {
+    const lienzo = document.createElement("canvas");
+    lienzo.width = 856;
+    lienzo.height = 540;
+    const ctx = lienzo.getContext("2d");
+    ctx.fillStyle = "#dfe8f5";
+    ctx.fillRect(0, 0, 856, 540);
+    ctx.fillStyle = "#1d3557";
+    ctx.font = "48px sans-serif";
+    ctx.fillText("DOCUMENTO FICTICIO", 160, 280);
+    return lienzo.toDataURL("image/jpeg", 0.8);
+  })).split(",")[1], "base64");
+  for (const doc of ["Carnet, reverso", "Licencia, frente", "Licencia, reverso"]) {
+    await cel.getByRole("dialog", { name: doc }).waitFor();
+    await cel.getByLabel("Subir archivo").setInputFiles({ name: "doc.jpg", mimeType: "image/jpeg", buffer: jpeg });
+    await page.getByRole("img", { name: doc }).waitFor();
+  }
+  await page.getByRole("link", { name: "Emitir comprobante" }).waitFor();
   await page.screenshot({ path: `${salida}/16-foto-en-pc.png`, fullPage: false });
   await cel.close();
 

@@ -6,7 +6,7 @@ import { api, fechaHoy, fechaHumana } from "../api";
 import { Fecha, diaSemanaIso, grillaLaborable } from "../fecha";
 import { useAuth } from "../auth";
 import { Ayuda, useAtajos } from "../atajos";
-import { Aviso, Esqueleto, Estado, Vacio, avisar } from "../ui";
+import { Aviso, Docs, Esqueleto, Estado, Vacio, avisar } from "../ui";
 import { useVivo } from "../vivo";
 
 interface Bloque {
@@ -358,10 +358,18 @@ export function Agenda() {
                               className={`min-h-16 w-full rounded-lg p-2 text-left ${diaPasado || horaPasada ? "bg-[#d9e1ea] text-[#4e5d6e]" : "bg-[#edf2fd]"}`}
                               onClick={() => navegar(d.fecha, "dia")}
                             >
-                              <span className="block text-xs">
-                                {personas.map((c) => c.nombre).join(" · ") ||
-                                  (diaPasado || horaPasada ? "—" : "Sin citas")}
-                              </span>
+                              {personas.length ? (
+                                <span className="grid gap-0.5 text-xs">
+                                  {personas.map((c) => (
+                                    <span key={c.id} className="flex items-center gap-1">
+                                      <span className="min-w-0 truncate">{c.nombre}</span>
+                                      <Docs cargados={c.docs_cargados} requeridos={c.docs_requeridos} compacto />
+                                    </span>
+                                  ))}
+                                </span>
+                              ) : (
+                                <span className="block text-xs">{diaPasado || horaPasada ? "—" : "Sin citas"}</span>
+                              )}
                               {libre > 0 ? (
                                 <span className="mt-2 block text-xs text-muted">
                                   {libre} libres
@@ -498,8 +506,9 @@ export function Agenda() {
                                 </span>
                                 <Estado valor={c.estado} />
                               </span>
-                              <span className="appointment-type">
-                                {c.tramite}
+                              <span className="appointment-type flex items-center gap-2">
+                                <span className="min-w-0 truncate">{c.tramite}</span>
+                                <Docs cargados={c.docs_cargados} requeridos={c.docs_requeridos} />
                               </span>
                             </button>
                           ))}
@@ -576,8 +585,7 @@ export function Agenda() {
                       <div>
                         <dt className="text-muted">Documentos</dt>
                         <dd>
-                          {elegida.docs_cargados ?? 0} de{" "}
-                          {elegida.docs_requeridos ?? 0} cargados
+                          {(elegida.docs_requeridos ?? 0) > 0 ? <Docs cargados={elegida.docs_cargados} requeridos={elegida.docs_requeridos} /> : "No requiere"}
                         </dd>
                       </div>
                     </dl>
@@ -604,10 +612,10 @@ export function Agenda() {
                         />
                       ) : null}
                       <Link
-                        className="btn border border-line bg-white"
+                        className={(elegida.docs_cargados ?? 0) < (elegida.docs_requeridos ?? 0) ? "btn bg-pine text-white" : "btn border border-line bg-white"}
                         to={`/citas/${elegida.id}`}
                       >
-                        Abrir ficha y documentos
+                        {(elegida.docs_cargados ?? 0) < (elegida.docs_requeridos ?? 0) ? "Fotografiar documentos" : "Abrir ficha"}
                       </Link>
                     </div>
                   </>

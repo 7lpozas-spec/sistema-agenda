@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { digitoVerificador } from "../../src/domain/rut";
 import { partesEnZona, sumarDias, instanteLocal } from "../../src/domain/tiempo";
 import { tareasProgramadas } from "../../src/app";
-import { entrar, llamar } from "../soporte";
+import { completarDocumentos, entrar, llamar, subirDocumento } from "../soporte";
 
 function rut(cuerpo: number): string {
   return `${cuerpo}-${digitoVerificador(String(cuerpo))}`;
@@ -182,7 +182,7 @@ describe("criterios de aceptación", () => {
     });
     if (subida.status !== 201) throw new Error(await subida.text());
     const doc = await subida.json() as { documento: { id: string; ruta: string; bytes: number } };
-    expect(doc.documento.ruta.startsWith("Licencias-Agendamiento/")).toBe(true);
+    expect(doc.documento.ruta.startsWith(`${fecha}/`)).toBe(true);
     expect(doc.documento.bytes).toBeLessThanOrEqual(500 * 1024);
     const guardado = await env.FOTOS.get(doc.documento.ruta);
     const bytes = new Uint8Array(await guardado!.arrayBuffer());
@@ -191,6 +191,27 @@ describe("criterios de aceptación", () => {
     expect(lectura.status).toBe(200);
     const lecturaAudit = await env.DB.prepare("SELECT COUNT(*) AS n FROM auditoria WHERE accion = 'leer_documento' AND entidad_id = ?").bind(doc.documento.id).first<{ n: number }>();
     expect(lecturaAudit?.n).toBe(1);
+
+    const pendiente = await llamar(`/citas/${id}`, { sesion: admin });
+    expect((pendiente.json as { faltantes: string[] }).faltantes).toEqual(["CARNET_FRENTE", "CARNET_REVERSO", "LICENCIA_FRENTE", "LICENCIA_REVERSO"]);
+    const bloqueado = await llamar(`/citas/${id}/comprobante.pdf`, { sesion: admin });
+    expect(bloqueado.status).toBe(409);
+    expect(JSON.stringify(bloqueado.json)).toContain("DOCUMENTOS_PENDIENTES");
+    const recepcion = await entrar("RECEPCION");
+    const otroDia = await subirDocumento(id, "CARNET_FRENTE", recepcion);
+    expect(otroDia.status).toBe(403);
+    expect(await subirDocumento(id, "CARNET_FRENTE", admin)).toHaveProperty("status", 201);
+    expect(await subirDocumento(id, "CARNET_FRENTE", admin)).toHaveProperty("status", 201);
+    const parcial = await env.DB.prepare("SELECT docs_cargados FROM citas WHERE id = ?").bind(id).first<{ docs_cargados: number }>();
+    expect(parcial?.docs_cargados).toBe(1);
+    await completarDocumentos(id, admin);
+    const completa = await llamar(`/citas/${id}`, { sesion: admin });
+    expect(completa.json).toMatchObject({ faltantes: [], comprobante: true });
+    const cargados = await env.DB.prepare("SELECT docs_cargados FROM citas WHERE id = ?").bind(id).first<{ docs_cargados: number }>();
+    expect(cargados?.docs_cargados).toBe(4);
+    const vigentes = await env.DB.prepare("SELECT COUNT(*) AS n FROM documentos WHERE cita_id = ? AND tipo = 'CARNET_FRENTE' AND vigente = 1").bind(id).first<{ n: number }>();
+    expect(vigentes?.n).toBe(1);
+    expect((await llamar(`/citas/${id}/comprobante.pdf`, { sesion: admin })).status).toBe(200);
 
     const manana = sumarDias(partesEnZona(new Date(), "America/Santiago").fecha, 1);
     await abrir("GENERAL", manana, "08:30", 2, 5);

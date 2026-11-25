@@ -95,4 +95,25 @@ describe("presupuesto de consultas D1", () => {
     const lote = await medir(() => publicarCuposLote(env.DB, new Date("2026-11-25T18:30:00Z")));
     expect(lote).toBeLessThanOrEqual(TOPE);
   });
+
+  it("la regeneración no reescribe cupos sin cambios", async () => {
+    const ahora = new Date("2026-11-25T18:30:00Z");
+    for (let vuelta = 0; vuelta < 200; vuelta += 1) {
+      const lote = await publicarCuposLote(env.DB, ahora);
+      if (!lote.pendiente) break;
+    }
+    const lotes = { n: 0 };
+    const original = env.DB.batch.bind(env.DB);
+    env.DB.batch = (async (stmts: D1PreparedStatement[]) => {
+      lotes.n += 1;
+      return original(stmts);
+    }) as D1Database["batch"];
+    try {
+      const otra = await publicarCuposLote(env.DB, ahora);
+      expect(otra).toEqual({ escritos: 0, pendiente: false });
+    } finally {
+      env.DB.batch = original;
+    }
+    expect(lotes.n).toBe(0);
+  });
 });

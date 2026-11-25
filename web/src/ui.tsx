@@ -247,3 +247,19 @@ export function Tabla<T extends { id: string }>({
     </div>
   );
 }
+
+/** Documentos cargados de los requeridos. Ámbar si falta alguno. */
+export function Docs({ cargados, requeridos, compacto = false }: { cargados?: number | null; requeridos?: number | null; compacto?: boolean }) {
+  const total = requeridos ?? 0;
+  if (total <= 0) return null;
+  const listos = Math.min(cargados ?? 0, total);
+  const completo = listos >= total;
+  return (
+    <span
+      title={completo ? "Documentos completos" : `Faltan ${total - listos} documentos`}
+      className={`inline-flex h-5 shrink-0 items-center gap-1 rounded-full px-1.5 text-[11px] font-semibold tabular-nums ${completo ? "bg-[#e5f6ec] text-[#146c43]" : "bg-[#fff1dc] text-[#9a5b00]"}`}
+    >
+      {compacto ? null : "Docs "}{listos}/{total}
+    </span>
+  );
+}

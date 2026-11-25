@@ -1,4 +1,4 @@
-import { ExternalLink, Printer, Undo2, UserPlus } from "lucide-react";
+import { Camera, ExternalLink, Printer, Undo2, UserPlus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { bloquePosterior } from "../../../src/domain/tiempo";
@@ -7,7 +7,7 @@ import { api, fechaHoy } from "../api";
 import { useAuth } from "../auth";
 import { Ayuda, useAtajos } from "../atajos";
 import { Fecha, textoFecha } from "../fecha";
-import { avisar } from "../ui";
+import { Docs, avisar } from "../ui";
 import { useVivo } from "../vivo";
 
 interface Cita {
@@ -226,6 +226,7 @@ export function Atencion() {
   }, [filas, indice, activaCita, activaSinHora, vista, esHoy, puedeSinHora]), ayuda);
 
   const resumen = meson?.resumen;
+  const docsPendientes = (lista?.citas ?? []).filter((cita) => cita.docs_requeridos > 0 && cita.docs_cargados < cita.docs_requeridos && cita.estado !== "NO_ASISTIO" && cita.estado !== "CANCELADA" && cita.estado !== "ANULADA").length;
   return (
     <section className="grid gap-3">
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -234,7 +235,7 @@ export function Atencion() {
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {esAdmin ? <div className="w-40"><Fecha id="fecha-atencion" etiqueta="Fecha" valor={fecha} alCambiar={(valor) => setFecha(valor || hoy)} laborables={[1, 2, 3, 4, 5, 6, 7]} /></div> : null}
           {puedeCerrar && esHoy ? (
-            <button type="button" className={`h-9 rounded-lg px-3 text-sm font-semibold ${confirmarCierre ? "bg-alert text-white" : "border border-line bg-white text-ink hover:bg-paper"}`} onClick={cerrarJornada} disabled={ocupado === "cierre"}>
+            <button type="button" className={`hidden h-9 rounded-lg px-3 text-sm font-semibold md:inline-flex md:items-center ${confirmarCierre ? "bg-alert text-white" : "border border-line bg-white text-ink hover:bg-paper"}`} onClick={cerrarJornada} disabled={ocupado === "cierre"}>
               {confirmarCierre ? `Confirmar: ${conteo.sinMarcar} sin marcar → No asistió` : "Cerrar jornada"}
             </button>
           ) : null}
@@ -243,15 +244,16 @@ export function Atencion() {
 
       {error ? <p role="alert" className="rounded-lg border border-alert/30 bg-red-50 px-3 py-2 text-sm text-alert">{error}</p> : null}
 
-      <div className="superficie grid grid-cols-3 divide-line sm:grid-cols-6 sm:divide-x lg:grid-cols-[repeat(6,minmax(0,1fr))_minmax(0,1.6fr)]">
+      <div className="superficie hidden divide-line md:grid md:grid-cols-7 md:divide-x lg:grid-cols-[repeat(7,minmax(0,1fr))_minmax(0,1.6fr)]">
         <Kpi etiqueta="Citadas" valor={lista?.contadores.total ?? 0} />
         <Kpi etiqueta="Por llegar" valor={conteo.porLlegar} />
         <Kpi etiqueta="En espera" valor={conteo.enEspera} tono={conteo.enEspera > 0 ? "aviso" : undefined} />
         <Kpi etiqueta="Atendidos" valor={conteo.atendidos} detalle={conteo.espera !== null ? `${conteo.espera} min prom.` : undefined} />
         <Kpi etiqueta="Sin marcar" valor={conteo.sinMarcar} tono={conteo.sinMarcar > 0 ? "alerta" : undefined} />
         <Kpi etiqueta="Inasistencias" valor={conteo.inasistencias} />
+        <Kpi etiqueta="Docs pendientes" valor={docsPendientes} tono={docsPendientes > 0 ? "aviso" : undefined} />
         {puedeSinHora ? (
-          <div className="col-span-3 flex items-center gap-4 border-t border-line bg-[#f7f9fc] px-3 py-2 sm:col-span-6 lg:col-span-1 lg:border-t-0">
+          <div className="col-span-7 flex items-center gap-4 border-t border-line bg-[#f7f9fc] px-3 py-2 lg:col-span-1 lg:border-t-0">
             <div className="min-w-0">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Sin hora en espera</p>
               <p className="flex items-baseline gap-2 whitespace-nowrap tabular-nums">
@@ -367,7 +369,33 @@ function TablaCitas({ citas, fecha, ahora, elegida, onElegir, ocupado, editable,
   if (!cargada) return <div className="superficie h-64 animate-pulse" aria-hidden />;
   if (citas.length === 0) return <div className="superficie px-4 py-8 text-center text-sm text-muted">Sin citas</div>;
   return (
-    <div className="superficie overflow-hidden">
+    <>
+    <ul className="superficie divide-y divide-[#eef2f7] overflow-hidden md:hidden" aria-label="Citas del día">
+      {citas.map((cita) => {
+        const etiqueta = etiquetaCita(cita, fecha, ahora);
+        const faltan = cita.docs_requeridos > 0 && cita.docs_cargados < cita.docs_requeridos;
+        return (
+          <li key={cita.id} className={`flex items-center gap-3 px-3 py-2.5 ${etiqueta.fila}`}>
+            <Link to={`/citas/${cita.id}`} className="flex min-w-0 flex-1 items-center gap-3">
+              <span className="w-12 shrink-0 text-base font-semibold tabular-nums">{cita.hora}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-semibold">{cita.nombre}</span>
+                <span className="mt-0.5 flex items-center gap-1.5 text-xs text-muted">
+                  <Pastilla texto={etiqueta.texto} tono={etiqueta.tono} />
+                  <Docs cargados={cita.docs_cargados} requeridos={cita.docs_requeridos} />
+                </span>
+              </span>
+            </Link>
+            {faltan ? (
+              <Link to={`/citas/${cita.id}`} aria-label={`Fotografiar documentos de ${cita.nombre}`} className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-[#fff1dc] text-[#9a5b00]"><Camera size={20} aria-hidden /></Link>
+            ) : editable && cita.estado === "AGENDADA" ? (
+              <button type="button" disabled={Boolean(ocupado)} className="h-11 shrink-0 rounded-lg bg-sky px-3 text-sm font-semibold text-white" onClick={() => marcar(cita.id, "ASISTIO")}>Llegó</button>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
+    <div className="superficie hidden overflow-hidden md:block">
       <div className="max-h-[calc(100vh-17rem)] min-h-64 overflow-auto">
         <table className="w-full table-fixed border-collapse text-left text-sm">
           <caption className="sr-only">Citas del día</caption>
@@ -407,13 +435,13 @@ function TablaCitas({ citas, fecha, ahora, elegida, onElegir, ocupado, editable,
                 <tr key={cita.id} onClick={() => onElegir(cita.id)} aria-selected={activa} className={`cursor-default ${nuevaHora && i > 0 ? "border-t border-[#cfd9e6]" : "border-t border-[#eef2f7]"} ${activa ? "bg-[#eaf0ff]" : etiqueta.fila} hover:bg-[#f2f6fc]`}>
                   <td className={`px-3 py-1.5 align-middle font-semibold tabular-nums ${activa ? "shadow-[inset_3px_0_0_var(--color-sky)]" : ""}`}>{nuevaHora ? cita.hora : <span className="text-transparent">{cita.hora}</span>}</td>
                   <td className="max-w-0 px-2 py-1.5">
-                    <p className="truncate font-semibold">{cita.nombre}{cita.es_sobrecupo ? <span className="ml-1.5 rounded bg-[#fff1dc] px-1 text-[10px] font-semibold text-[#9a5b00]">SC</span> : null}</p>
+                    <p className="flex items-center gap-1.5"><span className="truncate font-semibold">{cita.nombre}</span>{cita.es_sobrecupo ? <span className="rounded bg-[#fff1dc] px-1 text-[10px] font-semibold text-[#9a5b00]">SC</span> : null}<span className="xl:hidden"><Docs cargados={cita.docs_cargados} requeridos={cita.docs_requeridos} compacto /></span></p>
                     <p className="truncate text-xs text-muted xl:hidden">{cita.rut}<span className="lg:hidden"> · {cita.tramite}</span><span className="xl:hidden"> · {cita.agenda_id === "PRIMERA_VEZ" ? "Primera vez" : "General"}</span></p>
                   </td>
                   <td className="hidden whitespace-nowrap px-2 py-1.5 tabular-nums text-muted xl:table-cell">{cita.rut}</td>
                   <td className="hidden max-w-0 px-2 py-1.5 lg:table-cell"><p className="truncate">{cita.tramite}</p></td>
                   <td className="hidden px-2 py-1.5 xl:table-cell"><span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${cita.agenda_id === "PRIMERA_VEZ" ? "bg-[#e6f4ec] text-[#0d5c38]" : "bg-[#e7eefc] text-[#0b4f8a]"}`}>{cita.agenda_id === "PRIMERA_VEZ" ? "Primera vez" : "General"}</span></td>
-                  <td className={`hidden px-2 py-1.5 text-center tabular-nums xl:table-cell ${cita.docs_requeridos > 0 && cita.docs_cargados < cita.docs_requeridos ? "text-[#9a5b00]" : "text-muted"}`}>{cita.docs_cargados}/{cita.docs_requeridos}</td>
+                  <td className="hidden px-2 py-1.5 text-center xl:table-cell">{cita.docs_requeridos > 0 ? <Docs cargados={cita.docs_cargados} requeridos={cita.docs_requeridos} compacto /> : <span className="text-muted">—</span>}</td>
                   <td className="px-2 py-1.5"><Pastilla texto={etiqueta.texto} tono={etiqueta.tono} /></td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-right"><Espera minutos={espera} viva={llego && !cita.atencion_at} /></td>
                   <td className="px-3 py-1.5">
@@ -427,7 +455,11 @@ function TablaCitas({ citas, fecha, ahora, elegida, onElegir, ocupado, editable,
                       ) : null}
                       {editable && llego && !cita.atencion_at ? <Accion tono="exito" disabled={Boolean(ocupado)} onClick={() => atender(cita.id)}>{clave("ATENDIDO") ? "…" : "Atendido"}</Accion> : null}
                       {editable && cita.estado !== "AGENDADA" && !cita.atencion_at ? <Accion titulo="Deshacer" disabled={Boolean(ocupado)} onClick={() => marcar(cita.id, "AGENDADA")}><Undo2 size={15} aria-hidden /></Accion> : null}
-                      <a className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-paper hover:text-ink" title="Comprobante" aria-label="Comprobante" href={`/api/citas/${cita.id}/comprobante.pdf`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}><Printer size={15} aria-hidden /></a>
+                      {cita.docs_requeridos > 0 && cita.docs_cargados < cita.docs_requeridos ? (
+                        <Link className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-[#fff1dc] text-[#9a5b00] hover:bg-[#ffe6c2]" title="Fotografiar documentos" aria-label="Fotografiar documentos" to={`/citas/${cita.id}`} onClick={(e) => e.stopPropagation()}><Camera size={15} aria-hidden /></Link>
+                      ) : (
+                        <a className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-paper hover:text-ink" title="Comprobante" aria-label="Comprobante" href={`/api/citas/${cita.id}/comprobante.pdf`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}><Printer size={15} aria-hidden /></a>
+                      )}
                       <Link className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-paper hover:text-ink" title="Ficha" aria-label="Ficha" to={`/citas/${cita.id}`} onClick={(e) => e.stopPropagation()}><ExternalLink size={15} aria-hidden /></Link>
                     </div>
                   </td>
@@ -438,6 +470,7 @@ function TablaCitas({ citas, fecha, ahora, elegida, onElegir, ocupado, editable,
         </table>
       </div>
     </div>
+    </>
   );
 }
 
@@ -455,7 +488,30 @@ function TablaSinHora({ filas, ahora, elegida, onElegir, ocupado, editable, camb
   if (!cargada) return <div className="superficie h-64 animate-pulse" aria-hidden />;
   if (filas.length === 0) return <div className="superficie px-4 py-8 text-center text-sm text-muted">Sin atenciones</div>;
   return (
-    <div className="superficie overflow-hidden">
+    <>
+    <ul className="superficie divide-y divide-[#eef2f7] md:hidden" aria-label="Atenciones sin hora">
+      {filas.map((fila) => {
+        const abierta = fila.estado === "EN_ESPERA" || fila.estado === "EN_ATENCION";
+        const espera = minutosEntre(fila.llegadaAt, fila.atencionAt ?? (fila.estado === "EN_ESPERA" ? ahora : fila.terminoAt));
+        const estado = ESTADO_SIN_HORA[fila.estado];
+        return (
+          <li key={fila.id} className={`flex items-center gap-3 px-3 py-2.5 ${abierta ? "" : "text-muted"}`}>
+            <span className="w-14 shrink-0 whitespace-nowrap font-semibold tabular-nums text-ink">{fila.numeroTexto}</span>
+            <span className="min-w-0 flex-1">
+              <span className={`block truncate font-semibold ${abierta ? "text-ink" : ""}`}>{fila.nombre}</span>
+              <span className="mt-0.5 flex items-center gap-1.5 text-xs">
+                <Pastilla texto={estado.texto} tono={estado.tono} />
+                <span className="tabular-nums">{horaLocal(fila.llegadaAt)}</span>
+                <Espera minutos={espera} viva={fila.estado === "EN_ESPERA"} />
+              </span>
+            </span>
+            {editable && fila.estado === "EN_ESPERA" ? <button type="button" className="h-11 shrink-0 rounded-lg bg-sky px-3 text-sm font-semibold text-white disabled:opacity-50" disabled={Boolean(ocupado)} onClick={() => cambiar(fila.id, "EN_ATENCION")}>Atender</button> : null}
+            {editable && fila.estado === "EN_ATENCION" ? <button type="button" className="h-11 shrink-0 rounded-lg bg-pine px-3 text-sm font-semibold text-white disabled:opacity-50" disabled={Boolean(ocupado)} onClick={() => cambiar(fila.id, "ATENDIDO")}>Finalizar</button> : null}
+          </li>
+        );
+      })}
+    </ul>
+    <div className="superficie hidden overflow-hidden md:block">
       <div className="max-h-[calc(100vh-21rem)] min-h-64 overflow-auto">
         <table className="w-full table-fixed border-collapse text-left text-sm">
           <caption className="sr-only">Atenciones sin hora</caption>
@@ -521,6 +577,7 @@ function TablaSinHora({ filas, ahora, elegida, onElegir, ocupado, editable, camb
         </table>
       </div>
     </div>
+    </>
   );
 }
 

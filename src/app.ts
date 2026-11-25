@@ -8,6 +8,7 @@ import {
   type AgendaId,
   type EstadoCita,
   type Rol,
+  type TipoDocumento,
   type TipoTramite,
 } from "./domain/catalogo";
 import { enmascararRut, formatearRut, normalizarRut } from "./domain/rut";
@@ -24,15 +25,16 @@ import { ErrorApp, esObjeto } from "./http/error";
 import { auditar } from "./servicios/auditoria";
 import { armarCorreo, despachar, textoDocumentos } from "./servicios/correo";
 import { cuposDesdeAhora, diasLaborables, feriadosDelMes, libresPorDia } from "./servicios/disponibilidad";
-import { regenerarCupos } from "./servicios/generar";
+import { publicarCuposLote, regenerarCupos } from "./servicios/generar";
 import { armarEstadisticas, filtroDe, listadoCitas, type Estadisticas, type FiltroEstadistica } from "./servicios/estadisticas";
 import { cerrarJornadasAutomaticas, citasDelCierre, confirmarCierre, marcarInasistenciasVencidas, proponerTrasCierre } from "./servicios/jornada";
 import { armarPanel } from "./servicios/panel";
+import { comprobanteDisponible, estadoDocumentos, NOMBRE_DOCUMENTO } from "./servicios/documentos";
 import { buscarPersona, cambiarEstadoAtencion, cerrarMesonPendiente, crearServicio, editarServicio, esEstadoMeson, listarDia, listarServicios, numeroTexto, registrarAtencion, resumenMeson } from "./servicios/meson";
 import { libroXlsx, reportePdf } from "./exportar/documentos";
 import { comprobantePdf } from "./exportar/comprobante";
 import { candado, sala } from "./locks";
-import { publicarEnDrive } from "./services/almacen";
+import { driveListo, leerDeDrive, subirADrive } from "./services/almacen";
 type Variables = { usuario: Usuario; csrfHash: string };
 interface Usuario {
   id: string;
@@ -266,7 +268,7 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
         "SELECT hora, capacidad, usados FROM cupos_bloque WHERE agenda_id = ? AND fecha = ? ORDER BY hora",
       ).bind(agenda, fecha).all<{ hora: string; capacidad: number; usados: number }>(),
       c.env.DB.prepare(
-        `SELECT c.id, c.hora, c.estado, c.es_sobrecupo, c.docs_cargados, c.docs_requeridos, t.nombre AS tramite,
+        `SELECT c.id, c.hora, c.estado, c.es_sobrecupo, c.docs_cargados, (t.requiere_carnet + t.requiere_licencia) * 2 AS docs_requeridos, t.nombre AS tramite,
                 ci.rut, ci.nombres, ci.apellidos
          FROM citas c JOIN ciudadanos ci ON ci.id = c.ciudadano_id JOIN tipos_tramite t ON t.id = c.tipo_tramite_id
          WHERE c.agenda_id = ? AND c.fecha = ? AND c.estado NOT IN ('CANCELADA', 'ANULADA') ORDER BY c.hora`,
@@ -408,8 +410,9 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
        ORDER BY c.fecha DESC, c.hora DESC LIMIT 8`,
     ).bind(cita.ciudadano_id, cita.id).all();
     const documentos = await c.env.DB.prepare(
-      "SELECT id, tipo, bytes, mime, subido_at, vigente, drive_file_id FROM documentos WHERE cita_id = ? ORDER BY subido_at",
-    ).bind(cita.id).all();
+      "SELECT id, tipo, bytes, mime, subido_at, vigente, pagina, CASE WHEN drive_file_id <> id THEN 1 ELSE 0 END AS en_drive FROM documentos WHERE cita_id = ? ORDER BY subido_at",
+    ).bind(cita.id).all<{ tipo: string; vigente: number }>();
+    const docs = await estadoDocumentos(c.env.DB, cita.id, tipo);
     return c.json({
       cita: {
         ...cita,
@@ -417,6 +420,9 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
         documentosTexto: tipo ? textoDocumentos(tipo) : "cédula de identidad",
         direccion,
       },
+      requeridos: docs.requeridos,
+      faltantes: docs.faltantes,
+      comprobante: comprobanteDisponible(cita.estado, docs.faltantes),
       historial: historial.results,
       otras: otras.results,
       documentos: documentos.results,
@@ -505,7 +511,7 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     const q = limpiarLinea(c.req.query("q") ?? "");
     const rut = normalizarRut(q);
     const filas = await c.env.DB.prepare(
-      `SELECT c.id, c.hora, c.agenda_id, c.estado, c.es_sobrecupo, c.docs_cargados, c.docs_requeridos, c.atencion_at, c.asistencia_at,
+      `SELECT c.id, c.hora, c.agenda_id, c.estado, c.es_sobrecupo, c.docs_cargados, (t.requiere_carnet + t.requiere_licencia) * 2 AS docs_requeridos, c.atencion_at, c.asistencia_at,
               t.nombre AS tramite, ci.rut, ci.nombres, ci.apellidos
        FROM citas c JOIN ciudadanos ci ON ci.id = c.ciudadano_id JOIN tipos_tramite t ON t.id = c.tipo_tramite_id
        WHERE c.fecha = ? AND c.estado NOT IN ('CANCELADA', 'ANULADA')
@@ -546,7 +552,7 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     }
     if (usuario.rol === "INSTRUCTOR" && doc.fecha !== hoy) throw new ErrorApp(403, "SIN_PERMISO", "Solo puede ver documentos de las citas de hoy.");
     await auditar(c.env.DB, { usuarioId: usuario.id, accion: "leer_documento", entidad: "documento", entidadId: doc.id, ip: ipDe(c.req.raw), userAgent: c.req.header("user-agent") ?? "" });
-    const guardado = await leerFotoGuardada(c.env, doc.ruta, doc.contenido ?? null);
+    const guardado = await leerFotoGuardada(c.env, doc);
     if (!guardado) throw new ErrorApp(404, "PENDIENTE_DRIVE", "El documento está pendiente de sincronizar.");
     return c.body(guardado, 200, { "content-type": doc.mime, "cache-control": "private, no-store" });
   });
@@ -837,10 +843,6 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     await c.env.DB.prepare(
       `UPDATE horarios_semanales SET hora_inicio = ?, hora_fin = ? WHERE (? IS NULL OR agenda_id = ?)${filtroDia}`,
     ).bind(inicio, fin, agenda, agenda, ...dias).run();
-    await c.env.DB.prepare(
-      `INSERT INTO parametros (clave, valor, descripcion) VALUES ('cupos_cursor', '0', 'Indice del lote de cupos')
-       ON CONFLICT(clave) DO UPDATE SET valor = '0'`,
-    ).run();
     await auditar(c.env.DB, { usuarioId: c.get("usuario").id, accion: "horario", entidad: "horario", despues: { inicio, fin, agenda }, ip: ipDe(c.req.raw) });
     return c.json({ ok: true, horaInicio: inicio, horaFin: fin, cupos: 0 });
   });
@@ -1147,6 +1149,10 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     const hoy = partesEnZona(new Date(), "America/Santiago").fecha;
     if (usuario.rol === "RECEPCION" && cita.fecha !== hoy) throw new ErrorApp(403, "SIN_PERMISO", "Recepción solo ve las citas de hoy.");
     const tipo = await tipoPorId(c.env.DB, cita.tipo_tramite_id);
+    const docs = await estadoDocumentos(c.env.DB, cita.id, tipo);
+    if (!comprobanteDisponible(cita.estado, docs.faltantes)) {
+      throw new ErrorApp(409, "DOCUMENTOS_PENDIENTES", `Faltan documentos: ${docs.faltantes.map((doc) => NOMBRE_DOCUMENTO[doc] ?? doc).join(", ")}.`);
+    }
     const direccion = await parametro(c.env.DB, "direccion_atencion");
     const extra = await c.env.DB.prepare(
       `SELECT c.creado_at, COALESCE(u.nombre, 'Sin registro') AS registrado_por, a.duracion_bloque_min
@@ -1219,9 +1225,7 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
 
   api.post("/config/cupos/generar", async (c) => {
     if (c.get("usuario").rol !== "ADMIN") throw new ErrorApp(403, "SIN_PERMISO", "Solo administración genera cupos.");
-    const lote = await regenerarCupos(c.env.DB);
-    const cursor = await c.env.DB.prepare("SELECT valor FROM parametros WHERE clave = 'cupos_cursor'").first<{ valor: string }>();
-    const pendiente = (cursor?.valor ?? "0") !== "0";
+    const { escritos: lote, pendiente } = await publicarCuposLote(c.env.DB);
     await auditar(c.env.DB, { usuarioId: c.get("usuario").id, accion: "generar_cupos", entidad: "cupo", despues: { creados: lote, pendiente }, ip: ipDe(c.req.raw) });
     return c.json({ creados: lote, pendiente });
   });
@@ -1327,6 +1331,9 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     if (!puedeFotografiar(usuario.rol, cita.agenda_id as AgendaId)) {
       throw new ErrorApp(403, "SIN_PERMISO", "No puede cargar documentos de esa cita.");
     }
+    if (usuario.rol === "RECEPCION" && cita.fecha !== partesEnZona(new Date(), "America/Santiago").fecha) {
+      throw new ErrorApp(403, "SIN_PERMISO", "Recepción solo carga documentos de las citas de hoy.");
+    }
     const tipoDoc = c.req.query("tipo") ?? "";
     if (!["FOTO_CIUDADANO", "CEDULA", "DOCUMENTO", "CARNET_FRENTE", "CARNET_REVERSO", "LICENCIA_FRENTE", "LICENCIA_REVERSO"].includes(tipoDoc)) {
       throw new ErrorApp(400, "DATO_INVALIDO", "El tipo de documento no es válido.");
@@ -1336,33 +1343,54 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     if (bytes.byteLength > 500 * 1024) throw new ErrorApp(413, "FOTO_GRANDE", "La foto debe pesar 500 KB o menos.");
     const mime = detectarImagen(bytes) ?? (bytes[0] === 0xff && bytes[1] === 0xd8 ? "image/jpeg" : null);
     if (!mime) throw new ErrorApp(400, "FOTO_INVALIDA", "La fotografía debe ser JPEG, PNG o WebP.");
-    const anio = cita.fecha.slice(0, 4);
-    const mes = cita.fecha.slice(5, 7);
-    const carpeta = `Licencias-Agendamiento/${anio}/${mes}/${cita.rut.replace("-", "")}_${cita.id}`;
-    const nombreArchivo = `${tipoDoc.toLowerCase()}-${pagina}.jpg`;
-    const ruta = `${carpeta}/${nombreArchivo}`;
-    const multiple = tipoDoc === "DOCUMENTO";
-    if (!multiple) {
-      await c.env.DB.prepare("UPDATE documentos SET vigente = 0 WHERE cita_id = ? AND tipo = ? AND vigente = 1").bind(cita.id, tipoDoc).run();
-    }
+    const tipo = await tipoPorId(c.env.DB, cita.tipo_tramite_id);
+    const requeridos = tipo ? documentosRequeridos(tipo) : [];
+    const ahora = new Date();
+    const local = partesEnZona(ahora, "America/Santiago");
+    const carpetas = [cita.fecha, `${formatearRut(cita.rut)} ${cita.apellidos} ${cita.nombres}`.trim()];
+    const nombreArchivo = `${tipoDoc.toLowerCase()}${tipoDoc === "DOCUMENTO" ? `-${pagina}` : ""}-${local.hora.replace(":", "")}${String(ahora.getSeconds()).padStart(2, "0")}.jpg`;
+    const ruta = `${carpetas.join("/")}/${nombreArchivo}`;
     const id = crypto.randomUUID();
     const hash = await sha256Hex(btoa(String.fromCharCode(...bytes.slice(0, 64))));
-    const enR2 = await guardarEnR2(c.env, ruta, bytes, mime);
     let driveId: string | null = null;
-    try {
-      driveId = await publicarEnDrive(c.env, { bytes, mime, nombre: `${carpeta}/${nombreArchivo}` });
-    } catch (error) {
-      console.log(JSON.stringify({ nivel: "aviso", evento: "drive_respaldo", mensaje: error instanceof Error ? error.message : "drive" }));
+    const conDrive = driveListo(c.env);
+    if (conDrive) {
+      try {
+        driveId = await subirADrive(c.env, { bytes, mime, nombre: nombreArchivo, ruta: carpetas });
+      } catch (error) {
+        console.log(JSON.stringify({ nivel: "aviso", evento: "drive_pendiente", documento: id, mensaje: error instanceof Error ? error.message : "drive" }));
+      }
     }
-    await c.env.DB.prepare(
-      `INSERT INTO documentos (id, cita_id, tipo, drive_file_id, drive_folder_id, ruta, mime, bytes, sha256, vigente, dispositivo, subido_at, contenido, pagina)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
-    ).bind(id, cita.id, tipoDoc, driveId ?? id, carpeta, ruta, mime, bytes.byteLength, hash, usuario.id, new Date().toISOString(), enR2 ? null : bytes, pagina).run();
-    const cargados = await c.env.DB.prepare("SELECT COUNT(*) AS n FROM documentos WHERE cita_id = ? AND vigente = 1").bind(cita.id).first<{ n: number }>();
-    await c.env.DB.prepare("UPDATE citas SET docs_cargados = ? WHERE id = ?").bind(cargados?.n ?? 0, cita.id).run();
-    await auditar(c.env.DB, { usuarioId: usuario.id, accion: "doc_subido", entidad: "documento", entidadId: id, despues: { tipo: tipoDoc, ruta }, ip: ipDe(c.req.raw) });
-    await avisarOficina(c.env, { tipo: "foto", citaId: cita.id, documentoId: id });
-    return c.json({ documento: { id, tipo: tipoDoc, bytes: bytes.byteLength, ruta, pagina } }, 201);
+    const enR2 = driveId ? false : await guardarEnR2(c.env, ruta, bytes, mime);
+    const contenido = driveId || enR2 ? null : bytes;
+    const sentencias = [
+      c.env.DB.prepare(
+        `INSERT INTO documentos (id, cita_id, tipo, drive_file_id, drive_folder_id, ruta, mime, bytes, sha256, vigente, subido_por, dispositivo, subido_at, contenido, pagina)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+      ).bind(id, cita.id, tipoDoc, driveId ?? id, carpetas.join("/"), ruta, mime, bytes.byteLength, hash, usuario.id, c.req.header("user-agent")?.slice(0, 120) ?? null, ahora.toISOString(), contenido, pagina),
+    ];
+    if (tipoDoc !== "DOCUMENTO") {
+      sentencias.push(c.env.DB.prepare(
+        "UPDATE documentos SET vigente = 0, contenido = NULL WHERE cita_id = ? AND tipo = ? AND vigente = 1 AND id <> ?",
+      ).bind(cita.id, tipoDoc, id));
+    }
+    if (requeridos.includes(tipoDoc as TipoDocumento)) {
+      sentencias.push(c.env.DB.prepare(
+        `UPDATE citas SET docs_cargados = (SELECT COUNT(DISTINCT tipo) FROM documentos WHERE cita_id = ? AND vigente = 1 AND tipo IN (${requeridos.map(() => "?").join(",")})) WHERE id = ?`,
+      ).bind(cita.id, ...requeridos, cita.id));
+    }
+    if (conDrive && !driveId) {
+      sentencias.push(c.env.DB.prepare("INSERT INTO cola_drive (id, documento_id, intentos, ultimo_error, creado_at) VALUES (?, ?, 0, NULL, ?)").bind(crypto.randomUUID(), id, ahora.toISOString()));
+    }
+    await c.env.DB.batch(sentencias);
+    const docs = await estadoDocumentos(c.env.DB, cita.id, tipo);
+    await auditar(c.env.DB, { usuarioId: usuario.id, accion: "doc_subido", entidad: "documento", entidadId: id, despues: { tipo: tipoDoc, ruta, drive: Boolean(driveId) }, ip: ipDe(c.req.raw) });
+    await avisarOficina(c.env, { tipo: "foto", citaId: cita.id, agendaId: cita.agenda_id, documentoId: id });
+    return c.json({
+      documento: { id, tipo: tipoDoc, bytes: bytes.byteLength, ruta, pagina, almacen: driveId ? "drive" : "local" },
+      faltantes: docs.faltantes,
+      comprobante: comprobanteDisponible(cita.estado, docs.faltantes),
+    }, 201);
   }
 }
 
@@ -1390,13 +1418,46 @@ async function guardarEnR2(env: Env, ruta: string, bytes: Uint8Array, mime: stri
   return true;
 }
 
-async function leerFotoGuardada(env: Env, ruta: string, contenido: ArrayBuffer | null): Promise<ArrayBuffer | null> {
+async function leerFotoGuardada(env: Env, doc: { id: string; ruta: string; drive_file_id: string; contenido: ArrayBuffer | null }): Promise<ArrayBuffer | null> {
+  if (doc.contenido) return doc.contenido;
   const bucket = bucketFotos(env);
   if (bucket) {
-    const objeto = await bucket.get(ruta);
+    const objeto = await bucket.get(doc.ruta);
     if (objeto) return objeto.arrayBuffer();
   }
-  return contenido;
+  if (doc.drive_file_id && doc.drive_file_id !== doc.id) return leerDeDrive(env, doc.drive_file_id);
+  return null;
+}
+
+/** Reintenta subir a Drive las fotos que quedaron guardadas localmente. Sin pendientes no escribe nada. */
+export async function sincronizarDrive(env: Env, limite = 6): Promise<number> {
+  if (!driveListo(env)) return 0;
+  const pendientes = await env.DB.prepare(
+    `SELECT q.id AS cola, q.intentos, d.id, d.ruta, d.mime, d.drive_folder_id, d.drive_file_id, d.contenido
+     FROM cola_drive q JOIN documentos d ON d.id = q.documento_id
+     WHERE q.intentos < 20 ORDER BY q.creado_at LIMIT ?`,
+  ).bind(limite).all<{ cola: string; intentos: number; id: string; ruta: string; mime: string; drive_folder_id: string; drive_file_id: string; contenido: ArrayBuffer | null }>();
+  let subidos = 0;
+  for (const fila of pendientes.results) {
+    try {
+      const bytes = await leerFotoGuardada(env, { ...fila, drive_file_id: fila.id });
+      if (!bytes) {
+        await env.DB.prepare("DELETE FROM cola_drive WHERE id = ?").bind(fila.cola).run();
+        continue;
+      }
+      const driveId = await subirADrive(env, { bytes: new Uint8Array(bytes), mime: fila.mime, nombre: fila.ruta.split("/").pop() ?? `${fila.id}.jpg`, ruta: fila.drive_folder_id.split("/") });
+      await env.DB.batch([
+        env.DB.prepare("UPDATE documentos SET drive_file_id = ?, contenido = NULL WHERE id = ?").bind(driveId, fila.id),
+        env.DB.prepare("DELETE FROM cola_drive WHERE id = ?").bind(fila.cola),
+      ]);
+      subidos += 1;
+    } catch (error) {
+      await env.DB.prepare("UPDATE cola_drive SET intentos = intentos + 1, ultimo_error = ? WHERE id = ?")
+        .bind(error instanceof Error ? error.message.slice(0, 200) : "drive", fila.cola).run();
+      break;
+    }
+  }
+  return subidos;
 }
 
 function binario(
@@ -1599,6 +1660,7 @@ export async function tareasProgramadas(env: Env, ahora = new Date()): Promise<v
   const horaRecordatorio = mapa.hora_recordatorio ?? "10:00";
   await cerrarJornadasAutomaticas(env.DB, ahora, Number.isFinite(gracia) ? gracia : 30);
   await cerrarMesonPendiente(env.DB, partesEnZona(ahora, "America/Santiago").fecha, false, ahora, null);
+  await sincronizarDrive(env);
   if (partes.hora !== horaRecordatorio) return;
   const citas = await env.DB.prepare(
     `SELECT c.id, c.fecha, c.hora, c.agenda_id, t.nombre AS tramite, t.requiere_carnet, t.requiere_licencia,

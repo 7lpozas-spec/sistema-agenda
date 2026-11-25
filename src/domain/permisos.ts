@@ -45,7 +45,7 @@ export function puedeBloquear(rol: Rol): boolean {
 }
 
 export function puedeFotografiar(rol: Rol, agenda: AgendaId): boolean {
-  if (rol === "ADMIN" || rol === "OPERADOR_AGENDA") return true;
+  if (rol === "ADMIN" || rol === "OPERADOR_AGENDA" || rol === "RECEPCION") return true;
   return rol === "INSTRUCTOR" && agenda === "PRIMERA_VEZ";
 }
 

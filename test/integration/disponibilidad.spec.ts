@@ -4,7 +4,7 @@ import { digitoVerificador } from "../../src/domain/rut";
 import { instanteLocal, partesEnZona, sumarDias } from "../../src/domain/tiempo";
 import { tareasProgramadas } from "../../src/app";
 import { cuposDesdeAhora, libresPorDia } from "../../src/servicios/disponibilidad";
-import { entrar, llamar } from "../soporte";
+import { completarDocumentos, entrar, llamar } from "../soporte";
 
 const ZONA = "America/Santiago";
 
@@ -307,6 +307,9 @@ describe("cupos desde ahora en America/Santiago", () => {
     expect(cerrado?.capacidad).toBe(cerrado?.usados);
     const excepcion = await env.DB.prepare("SELECT COUNT(*) AS n FROM excepciones_dia WHERE agenda_id = 'GENERAL' AND fecha = ? AND tipo = 'BLOQUEO'").bind(origen).first<{ n: number }>();
     expect(excepcion?.n).toBe(1);
+    const sinDocs = await llamar(`/citas/${idMueve}/comprobante.pdf`, { sesion: operador });
+    expect(sinDocs.status).toBe(409);
+    await completarDocumentos(idMueve, operador);
     const pdf = await llamar(`/citas/${idMueve}/comprobante.pdf`, { sesion: operador });
     expect(pdf.status).toBe(200);
     expect(pdf.headers.get("content-type")).toContain("pdf");

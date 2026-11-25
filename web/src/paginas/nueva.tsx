@@ -5,7 +5,7 @@ import { api, fechaHoy } from "../api";
 import { useAuth } from "../auth";
 import { mascaraRut, normalizarRut } from "../../../src/domain/rut";
 import { Fecha } from "../fecha";
-import { Aviso, Campo, claseCampo } from "../ui";
+import { Aviso, Campo, Docs, claseCampo } from "../ui";
 
 interface Tipo {
   id: string;
@@ -13,6 +13,8 @@ interface Tipo {
   requiere_agenda: number;
   agenda_id: "GENERAL" | "PRIMERA_VEZ" | null;
   orden: number;
+  requiere_carnet?: number;
+  requiere_licencia?: number;
 }
 interface Bloque {
   hora: string;
@@ -258,7 +260,14 @@ export function NuevaCita() {
           {avisoPersona.includes("inasistencias") ? (
             <Aviso tono="info">{avisoPersona}</Aviso>
           ) : null}
-          <a className="btn border border-line bg-white" href={`/api/citas/${creada}/comprobante.pdf`} target="_blank" rel="noreferrer">Comprobante PDF</a>
+          {tipo?.requiere_carnet || tipo?.requiere_licencia ? (
+            <p className="flex items-center gap-2 text-sm font-semibold text-[#9a5b00]">
+              <Docs cargados={0} requeridos={(tipo.requiere_carnet ? 2 : 0) + (tipo.requiere_licencia ? 2 : 0)} />
+              Documentos pendientes
+            </p>
+          ) : (
+            <a className="btn border border-line bg-white" href={`/api/citas/${creada}/comprobante.pdf`} target="_blank" rel="noreferrer">Comprobante PDF</a>
+          )}
           <Link className="btn border border-line bg-white" to={volver}>
             Volver a la agenda
           </Link>
@@ -266,7 +275,7 @@ export function NuevaCita() {
             className="btn bg-pine text-white hover:bg-pine-dark"
             to={`/citas/${creada}`}
           >
-            Abrir
+            {tipo?.requiere_carnet || tipo?.requiere_licencia ? "Fotografiar documentos" : "Abrir"}
           </Link>
         </section>
       </div>

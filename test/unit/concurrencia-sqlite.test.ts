@@ -46,6 +46,7 @@ describe("concurrencia del último cupo", () => {
       })),
     );
     const revision = new DatabaseSync(archivo);
+    revision.exec("PRAGMA busy_timeout = 5000");
     const bloque = revision.prepare("SELECT usados, capacidad FROM cupos_bloque").get() as { usados: number; capacidad: number };
     const citas = revision.prepare("SELECT COUNT(*) AS n FROM citas").get() as { n: number };
     revision.close();

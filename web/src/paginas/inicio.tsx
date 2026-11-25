@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, fechaHoy } from "../api";
 import { Fecha, diaSemanaIso, grillaLaborable, textoFecha } from "../fecha";
-import { Aviso, Esqueleto } from "../ui";
+import { Aviso, Docs, Esqueleto } from "../ui";
 import { useVivo } from "../vivo";
 
 interface Hueco { fecha: string; hora: string; libres: number }
@@ -21,7 +21,7 @@ interface Panel {
   vista: "admin" | "operador" | "instructor" | "recepcion";
   puedeAgendar: boolean;
   exportar: boolean;
-  hoy: { fecha: string; citados: number; llegaron: number; faltan: number; inasistencias: number; aTiempo: number; atrasados: number; proxima: { id: string; hora: string; nombre: string; tramite: string } | null };
+  hoy: { fecha: string; citados: number; llegaron: number; faltan: number; inasistencias: number; aTiempo: number; atrasados: number; proxima: { id: string; hora: string; nombre: string; tramite: string; docsCargados: number; docsRequeridos: number } | null; docsPendientes: number };
   periodo: { citados: number; llegaron: number; aTiempo: number; atrasados: number; inasistencias: number; esperaMin: number | null; anterior: { citados: number; llegaron: number; aTiempo: number; atrasados: number; inasistencias: number } };
   flujo: { hora: string; citados: number; llegaron: number }[];
   proximosDias: { fecha: string; citados: number }[];
@@ -92,7 +92,7 @@ export function Inicio() {
       {panel && vista === "recepcion" ? <Recepcion panel={panel} /> : null}
       {panel && vista === "instructor" ? <Instructor panel={panel} /> : null}
       {panel && (vista === "operador" || vista === "admin") ? <Oficina panel={panel} /> : null}
-      {panel?.kpis ? <KpiFila kpis={panel.kpis} /> : null}
+      {panel?.kpis ? <KpiFila kpis={panel.kpis} docs={panel.hoy.docsPendientes} destino={vista === "admin" ? "/atencion" : vista === "instructor" ? "/agenda/primera_vez" : "/agenda/general"} /> : null}
       {panel && vista === "admin" ? (
         <div className="grid gap-3 lg:grid-cols-2">
           {panel.kpisPorAgenda.map((fila) => (
@@ -149,10 +149,11 @@ function Instructor({ panel }: { panel: Panel }) {
               <span className="truncate font-semibold">{panel.hoy.proxima.nombre}</span>
             </Link>
           ) : <p className="text-sm text-muted">Sin pendientes</p>}
-          {panel.hoy.proxima ? <p className="truncate text-xs text-muted">{panel.hoy.proxima.tramite}</p> : null}
+          {panel.hoy.proxima ? <p className="flex items-center gap-2 truncate text-xs text-muted">{panel.hoy.proxima.tramite}<Docs cargados={panel.hoy.proxima.docsCargados} requeridos={panel.hoy.proxima.docsRequeridos} /></p> : null}
         </div>
         <div className="ml-auto flex gap-4 text-center tabular-nums">
           <Cifra etiqueta="Pendientes" valor={panel.hoy.faltan} />
+          <Cifra etiqueta="Docs" valor={panel.hoy.docsPendientes} />
           <Cifra etiqueta="Llegaron" valor={panel.hoy.llegaron} />
           <Cifra etiqueta="Inasistencias" valor={panel.hoy.inasistencias} />
         </div>
@@ -184,10 +185,10 @@ function Recepcion({ panel }: { panel: PanelConMeson }) {
   const maximo = Math.max(1, ...porHora.map((fila) => fila.citados + fila.sinHora));
   return (
     <div className="grid gap-3">
-      <div className="superficie grid grid-cols-4 divide-line sm:divide-x lg:grid-cols-8">
+      <div className="superficie grid grid-cols-2 divide-line sm:grid-cols-4 sm:divide-x lg:grid-cols-8">
         <Kpi etiqueta="Citados" valor={panel.hoy.citados} />
         <Kpi etiqueta="Llegaron" valor={panel.hoy.llegaron} />
-        <Kpi etiqueta="A tiempo" valor={panel.hoy.aTiempo} />
+        <Kpi etiqueta="Docs pendientes" valor={panel.hoy.docsPendientes} tono={panel.hoy.docsPendientes > 0 ? "aviso" : undefined} />
         <Kpi etiqueta="Atrasos" valor={panel.hoy.atrasados} />
         <Kpi etiqueta="Inasistencias" valor={panel.hoy.inasistencias} />
         <Kpi etiqueta="Pendientes" valor={Math.max(0, panel.hoy.faltan)} />
@@ -359,7 +360,7 @@ function Tarjeta({ agenda, nombre, hueco, puedeAgendar }: { agenda: string; nomb
   );
 }
 
-function KpiFila({ kpis }: { kpis: Kpis }) {
+function KpiFila({ kpis, docs, destino }: { kpis: Kpis; docs: number; destino: string }) {
   const filas = [
     ["Agendadas", kpis.total, kpis.total, kpis.anterior.total],
     ["Asistencia", kpis.asistieron, kpis.asistieron, kpis.anterior.asistieron],
@@ -369,7 +370,11 @@ function KpiFila({ kpis }: { kpis: Kpis }) {
     ["Cancelaciones", kpis.canceladas, kpis.canceladas, kpis.anterior.canceladas],
   ] as const;
   return (
-    <div className="superficie grid grid-cols-3 divide-line sm:grid-cols-6 sm:divide-x">
+    <div className="superficie grid grid-cols-3 divide-line sm:grid-cols-7 sm:divide-x">
+      <Link to={destino} className="order-last px-3 py-2 hover:bg-paper">
+        <p className="truncate text-[11px] font-semibold uppercase tracking-wide text-muted">Docs pendientes hoy</p>
+        <p className={`text-xl font-semibold tabular-nums ${docs > 0 ? "text-[#9a5b00]" : ""}`}>{docs}</p>
+      </Link>
       {filas.map(([etiqueta, valor, comparado, antes]) => (
         <article key={etiqueta} className="px-3 py-2">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">{etiqueta}</p>

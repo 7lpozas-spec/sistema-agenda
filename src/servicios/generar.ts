@@ -2,9 +2,9 @@ import type { AgendaId } from "../domain/catalogo";
 import { generarDias, type PlantillaDia } from "../domain/cupos";
 import { partesEnZona, sumarDias } from "../domain/tiempo";
 
-const POR_LOTE = 24;
+const POR_LOTE = 60;
 
-interface Pieza {
+export interface Pieza {
   agendaId: string;
   fecha: string;
   hora: string | null;
@@ -13,7 +13,7 @@ interface Pieza {
 }
 
 export async function publicarCuposLote(db: D1Database, ahora = new Date()): Promise<{ escritos: number; pendiente: boolean }> {
-  const [agendas, horarios, feriados, bloqueos, ausencias, parametro, cursorFila] = await Promise.all([
+  const [agendas, horarios, feriados, bloqueos, ausencias, parametro] = await Promise.all([
     db.prepare("SELECT id, duracion_bloque_min, ventana_dias FROM agendas WHERE activa = 1").all<{
       id: AgendaId;
       duracion_bloque_min: number;
@@ -33,7 +33,6 @@ export async function publicarCuposLote(db: D1Database, ahora = new Date()): Pro
     db.prepare("SELECT agenda_id, fecha FROM excepciones_dia WHERE tipo = 'BLOQUEO'").all<{ agenda_id: string; fecha: string }>(),
     db.prepare("SELECT fecha FROM disponibilidad_examinador WHERE estado = 'AUSENTE'").all<{ fecha: string }>(),
     db.prepare("SELECT valor FROM parametros WHERE clave = 'examenes_por_hora'").first<{ valor: string }>(),
-    db.prepare("SELECT valor FROM parametros WHERE clave = 'cupos_cursor'").first<{ valor: string }>(),
   ]);
   const hoy = partesEnZona(ahora, "America/Santiago").fecha;
   const festivos = new Set(feriados.results.map((fila) => fila.fecha));
@@ -69,18 +68,30 @@ export async function publicarCuposLote(db: D1Database, ahora = new Date()): Pro
       }
     }
   }
-  const cursor = Math.max(0, Number(cursorFila?.valor ?? "0") || 0);
-  const inicio = cursor >= piezas.length ? 0 : cursor;
-  const corte = piezas.slice(inicio, inicio + POR_LOTE);
-  if (corte.length === 0) {
-    await guardarCursor(db, "0");
-    return { escritos: 0, pendiente: false };
-  }
-  await db.batch(corte.map((pieza) => sentencia(db, pieza)));
-  const siguiente = inicio + corte.length;
-  const pendiente = siguiente < piezas.length;
-  await guardarCursor(db, pendiente ? String(siguiente) : "0");
-  return { escritos: corte.filter((pieza) => pieza.hora).length, pendiente };
+  const pendientes = await piezasConCambios(db, piezas, hoy);
+  const corte = pendientes.slice(0, POR_LOTE);
+  if (corte.length > 0) await db.batch(corte.map((pieza) => sentencia(db, pieza)));
+  return { escritos: corte.filter((pieza) => pieza.hora).length, pendiente: pendientes.length > corte.length };
+}
+
+/** Solo las piezas que faltan o cuya capacidad cambió. Leer es barato; escribir lo mismo otra vez no. */
+export async function piezasConCambios(db: D1Database, piezas: Pieza[], desde: string): Promise<Pieza[]> {
+  if (piezas.length === 0) return [];
+  const [dias, bloques] = await Promise.all([
+    db.prepare("SELECT agenda_id, fecha, capacidad, usados FROM cupos_dia WHERE fecha >= ?").bind(desde)
+      .all<{ agenda_id: string; fecha: string; capacidad: number; usados: number }>(),
+    db.prepare("SELECT agenda_id, fecha, hora, capacidad, usados FROM cupos_bloque WHERE fecha >= ?").bind(desde)
+      .all<{ agenda_id: string; fecha: string; hora: string; capacidad: number; usados: number }>(),
+  ]);
+  const actuales = new Map<string, { capacidad: number; usados: number }>();
+  for (const fila of dias.results) actuales.set(`${fila.agenda_id}|${fila.fecha}|`, fila);
+  for (const fila of bloques.results) actuales.set(`${fila.agenda_id}|${fila.fecha}|${fila.hora}`, fila);
+  return piezas.filter((pieza) => {
+    const actual = actuales.get(`${pieza.agendaId}|${pieza.fecha}|${pieza.hora ?? ""}`);
+    if (!actual) return true;
+    const deseada = Math.max(pieza.hora ? pieza.capacidad : pieza.cupoDiario, actual.usados);
+    return actual.capacidad !== deseada;
+  });
 }
 
 export async function regenerarCupos(db: D1Database, ahora = new Date()): Promise<number> {
@@ -102,9 +113,3 @@ function sentencia(db: D1Database, pieza: Pieza): D1PreparedStatement {
   ).bind(pieza.agendaId, pieza.fecha, pieza.hora, pieza.capacidad);
 }
 
-async function guardarCursor(db: D1Database, valor: string): Promise<void> {
-  await db.prepare(
-    `INSERT INTO parametros (clave, valor, descripcion) VALUES ('cupos_cursor', ?, 'Indice del lote de cupos')
-     ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor`,
-  ).bind(valor).run();
-}

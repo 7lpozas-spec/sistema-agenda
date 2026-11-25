@@ -28,7 +28,8 @@ export interface Panel {
     inasistencias: number;
     aTiempo: number;
     atrasados: number;
-    proxima: { id: string; hora: string; nombre: string; tramite: string } | null;
+    proxima: { id: string; hora: string; nombre: string; tramite: string; docsCargados: number; docsRequeridos: number } | null;
+    docsPendientes: number;
     citas: CitaDia[];
   };
   periodo: {
@@ -198,7 +199,7 @@ export async function armarPanel(
     conteoEstado(db, desde, hasta, agendas),
     conteoEstado(db, anteriorDesde, anteriorHasta, agendas),
     db.prepare(
-      `SELECT c.id, c.hora, c.estado, c.agenda_id AS agenda, c.docs_cargados AS docsCargados, c.docs_requeridos AS docsRequeridos,
+      `SELECT c.id, c.hora, c.estado, c.agenda_id AS agenda, c.docs_cargados AS docsCargados, (t.requiere_carnet + t.requiere_licencia) * 2 AS docsRequeridos,
               t.nombre AS tramite, ci.rut, ci.apellidos || ', ' || ci.nombres AS nombre
        FROM citas c JOIN ciudadanos ci ON ci.id = c.ciudadano_id JOIN tipos_tramite t ON t.id = c.tipo_tramite_id
        WHERE c.fecha = ? AND c.estado NOT IN ('CANCELADA','ANULADA') AND c.agenda_id IN (${claves})
@@ -302,7 +303,8 @@ export async function armarPanel(
       fecha: hoy,
       ...hoyConteo,
       faltan: hoyConteo.citados - hoyConteo.llegaron - hoyConteo.inasistencias,
-      proxima: proxima ? { id: proxima.id, hora: proxima.hora, nombre: proxima.nombre, tramite: proxima.tramite } : null,
+      proxima: proxima ? { id: proxima.id, hora: proxima.hora, nombre: proxima.nombre, tramite: proxima.tramite, docsCargados: proxima.docsCargados, docsRequeridos: proxima.docsRequeridos } : null,
+      docsPendientes: listaHoy.filter((cita) => cita.docsRequeridos > 0 && cita.docsCargados < cita.docsRequeridos && cita.estado !== "NO_ASISTIO").length,
       citas: listaHoy,
     },
     periodo: {
