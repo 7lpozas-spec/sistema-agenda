@@ -1,8 +1,9 @@
-import { CalendarDays, Plus, Search, PanelRightOpen } from "lucide-react";
+import { CalendarDays, Plus, Search } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
+import { bloquePosterior } from "../../../src/domain/tiempo";
 import { api, fechaHoy, fechaHumana } from "../api";
-import { Fecha, grillaLaborable } from "../fecha";
+import { Fecha, diaSemanaIso, grillaLaborable } from "../fecha";
 import { useAuth } from "../auth";
 import { Aviso, Esqueleto, Estado, Vacio, avisar } from "../ui";
 import { useVivo } from "../vivo";
@@ -11,6 +12,7 @@ interface Bloque {
   hora: string;
   capacidad: number;
   usados: number;
+  reservable?: boolean;
 }
 interface Cita {
   id: string;
@@ -29,8 +31,12 @@ interface Dia {
 }
 interface DiaMes {
   fecha: string;
-  capacidad: number;
-  usados: number;
+  capacidad?: number;
+  usados?: number;
+  libres?: number;
+  ocupados?: number;
+  atendidas?: number;
+  feriado?: boolean;
 }
 function sumar(fecha: string, dias: number) {
   const [a, m, d] = fecha.split("-").map(Number);
@@ -66,6 +72,9 @@ export function Agenda() {
   const [dias, setDias] = useState<Dia[]>([]);
   const [mes, setMes] = useState<DiaMes[]>([]);
   const [laborables, setLaborables] = useState([1, 2, 3, 4, 5, 6]);
+  const [feriados, setFeriados] = useState<string[]>([]);
+  const [solicitud, setSolicitud] = useState<{ cita: Cita; hora: string } | null>(null);
+  const dialogo = useRef<HTMLDialogElement>(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
@@ -97,10 +106,12 @@ export function Agenda() {
         const disponibilidad = await api<{
           dias: DiaMes[];
           laborables: number[];
+          feriados?: string[];
         }>(`/api/agendas/${agendaId}/disponibilidad?mes=${fecha.slice(0, 7)}`);
         if (!activo) return;
         const habiles = disponibilidad.laborables;
         setLaborables(habiles);
+        setFeriados(disponibilidad.feriados ?? []);
         setMes(disponibilidad.dias);
         if (vista !== "mes") {
           const fechas =
@@ -164,6 +175,8 @@ export function Agenda() {
   }
   const bloques = dias[0]?.bloques ?? [];
   const citas = dias[0]?.citas ?? [];
+  const ahora = new Date();
+  const fechaReserva = fecha < fechaHoy() ? fechaHoy() : fecha;
   const elegida = citas.find((c) => c.id === seleccionada);
   const hayFiltro = Boolean(consulta.trim() || estado);
   const filtradas = citas.filter(
@@ -173,21 +186,29 @@ export function Agenda() {
         .toLocaleLowerCase()
         .includes(consulta.trim().toLocaleLowerCase()),
   );
-  const grilla = grillaLaborable(fecha.slice(0, 7), laborables);
   const horas = [
     ...new Set(dias.flatMap((d) => d.bloques.map((b) => b.hora))),
   ].sort();
   const vuelta = encodeURIComponent(
     `/agenda/${agenda}?fecha=${fecha}&vista=${vista}`,
   );
-  const nueva = (hora = "") =>
-    `/citas/nueva?agenda=${agenda}&fecha=${fecha}&hora=${hora}&volver=${vuelta}`;
+  const nueva = (hora = "", dia = fechaReserva) =>
+    `/citas/nueva?agenda=${agenda}&fecha=${dia}&hora=${hora}&volver=${vuelta}`;
+  const sePuedeReservar = (dia: string, bloque: Bloque) =>
+    bloque.reservable ??
+    (bloquePosterior(dia, bloque.hora, ahora) && bloque.usados < bloque.capacidad);
+  function pedirMover(cita: Cita, hora: string) {
+    if (!puedeReservar || cita.estado !== "AGENDADA" || cita.hora === hora) return;
+    const destino = bloques.find((bloque) => bloque.hora === hora);
+    if (!destino || !sePuedeReservar(fecha, destino)) return;
+    setSolicitud({ cita, hora });
+    dialogo.current?.showModal();
+  }
 
   return (
     <section className="grid gap-5">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <p className="page-eyebrow">Licencias de conducir / Programación</p>
           <h1 className="page-title">{titulo}</h1>
           <p className="mt-1 text-sm text-muted">{fechaHumana(fecha)}</p>
         </div>
@@ -273,38 +294,14 @@ export function Agenda() {
               ›
             </button>
           </div>
-          <div
-            className="grid gap-1"
-            style={{
-              gridTemplateColumns: `repeat(${grilla.etiquetas.length || 1}, minmax(0,1fr))`,
-            }}
-          >
-            {grilla.etiquetas.map((t) => (
-              <span key={t} className="py-2 text-center text-xs text-muted">
-                {t}
-              </span>
-            ))}
-            {grilla.celdas.map((f, i) => {
-              if (!f) return <span key={`v${i}`} />;
-              const dia = mes.find((d) => d.fecha === f);
-              const libres = Math.max(
-                0,
-                (dia?.capacidad ?? 0) - (dia?.usados ?? 0),
-              );
-              return (
-                <button
-                  key={f}
-                  className={`min-h-20 rounded-lg border p-2 text-left ${f === fechaHoy() ? "border-sky bg-[#eef3ff]" : "border-line bg-white"}`}
-                  onClick={() => navegar(f, "dia")}
-                >
-                  <span className="font-medium">{Number(f.slice(8))}</span>
-                  <span className="mt-2 block text-xs text-muted">
-                    {dia?.capacidad ? `${libres} libres` : "Sin bloques"}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+          <MesAgenda
+            mes={fecha.slice(0, 7)}
+            activo={fecha}
+            dias={mes}
+            laborables={laborables}
+            feriados={feriados}
+            onElegir={(f) => navegar(f, "dia")}
+          />
         </div>
       ) : null}
       {!cargando && !error && vista === "semana" ? (
@@ -316,7 +313,7 @@ export function Agenda() {
                 <tr>
                   <th className="p-3">Hora</th>
                   {dias.map((d) => (
-                    <th className="p-3" key={d.fecha}>
+                    <th className={`p-3 ${d.fecha < fechaHoy() ? "agenda-week-past" : ""}`} key={d.fecha}>
                       {new Intl.DateTimeFormat("es-CL", {
                         weekday: "short",
                         day: "numeric",
@@ -335,21 +332,26 @@ export function Agenda() {
                     {dias.map((d) => {
                       const b = d.bloques.find((b) => b.hora === h);
                       const personas = d.citas.filter((c) => c.hora === h);
+                      const diaPasado = d.fecha < fechaHoy();
+                      const horaPasada = b ? !bloquePosterior(d.fecha, b.hora, ahora) : false;
+                      const libre = b && sePuedeReservar(d.fecha, b) ? Math.max(0, b.capacidad - b.usados) : 0;
                       return (
-                        <td key={d.fecha} className="p-1 align-top">
+                        <td key={d.fecha} className={`p-1 align-top ${diaPasado ? "agenda-week-past" : ""}`}>
                           {b ? (
                             <button
                               type="button"
-                              className="min-h-16 w-full rounded-lg bg-[#edf2fd] p-2 text-left"
+                              className={`min-h-16 w-full rounded-lg p-2 text-left ${diaPasado || horaPasada ? "bg-[#d9e1ea] text-[#4e5d6e]" : "bg-[#edf2fd]"}`}
                               onClick={() => navegar(d.fecha, "dia")}
                             >
                               <span className="block text-xs">
                                 {personas.map((c) => c.nombre).join(" · ") ||
-                                  "Sin citas"}
+                                  (diaPasado || horaPasada ? "—" : "Sin citas")}
                               </span>
-                              <span className="mt-2 block text-xs text-muted">
-                                {Math.max(0, b.capacidad - b.usados)} libres
-                              </span>
+                              {libre > 0 ? (
+                                <span className="mt-2 block text-xs text-muted">
+                                  {libre} libres
+                                </span>
+                              ) : null}
                             </button>
                           ) : (
                             <span className="text-xs text-muted">—</span>
@@ -412,10 +414,10 @@ export function Agenda() {
                   <span className="text-muted" aria-live="polite">
                     {citas.length} citas ·{" "}
                     {bloques.reduce(
-                      (n, b) => n + Math.max(0, b.capacidad - b.usados),
+                      (n, b) => n + (sePuedeReservar(fecha, b) ? Math.max(0, b.capacidad - b.usados) : 0),
                       0,
                     )}{" "}
-                    cupos de bloque libres
+                    cupos libres
                   </span>
                 </div>
                 {hayFiltro && !filtradas.length ? (
@@ -424,11 +426,26 @@ export function Agenda() {
                   </div>
                 ) : null}
                 {bloques.map((b) => {
-                  const libres = Math.max(0, b.capacidad - b.usados);
+                  const reservable = sePuedeReservar(fecha, b);
+                  const libres = reservable ? Math.max(0, b.capacidad - b.usados) : 0;
+                  const pasado = !bloquePosterior(fecha, b.hora, ahora);
                   const personas = filtradas.filter((c) => c.hora === b.hora);
                   if (hayFiltro && !personas.length) return null;
                   return (
-                    <div key={b.hora} className="agenda-row">
+                    <div
+                      key={b.hora}
+                      className={`agenda-row ${pasado ? "is-past" : ""} ${reservable ? "is-open" : ""}`}
+                      onDragOver={(evento) => {
+                        if (puedeReservar && reservable) evento.preventDefault();
+                      }}
+                      onDrop={(evento) => {
+                        evento.preventDefault();
+                        if (!puedeReservar || !reservable) return;
+                        const id = evento.dataTransfer.getData("text/plain");
+                        const cita = citas.find((item) => item.id === id);
+                        if (cita) pedirMover(cita, b.hora);
+                      }}
+                    >
                       <div className="agenda-time">
                         <span>{b.hora}</span>
                         <small>
@@ -441,14 +458,23 @@ export function Agenda() {
                             <button
                               type="button"
                               key={c.id}
+                              draggable={puedeReservar && c.estado === "AGENDADA"}
                               aria-pressed={c.id === seleccionada}
+                              className={`appointment ${puedeReservar && c.estado === "AGENDADA" ? "cursor-grab" : ""}`}
+                              onDragStart={(evento) => {
+                                if (!puedeReservar || c.estado !== "AGENDADA") {
+                                  evento.preventDefault();
+                                  return;
+                                }
+                                evento.dataTransfer.setData("text/plain", c.id);
+                                evento.dataTransfer.effectAllowed = "move";
+                              }}
                               onClick={() => {
                                 setSeleccionada(c.id);
                                 requestAnimationFrame(() =>
                                   panel.current?.focus(),
                                 );
                               }}
-                              className="appointment"
                               data-state={c.estado}
                             >
                               <span className="appointment-top">
@@ -462,10 +488,7 @@ export function Agenda() {
                               </span>
                             </button>
                           ))}
-                          {puedeReservar &&
-                          libres > 0 &&
-                          fecha >= fechaHoy() &&
-                          !hayFiltro ? (
+                          {puedeReservar && reservable && !hayFiltro ? (
                             <Link
                               aria-label={`Reservar ${b.hora}`}
                               className="slot-reserve"
@@ -558,36 +581,12 @@ export function Agenda() {
                           {guardando ? "Guardando…" : "Marcar llegada"}
                         </button>
                       ) : null}
-                      {puedeReservar &&
-                      elegida.estado === "AGENDADA" &&
-                      fecha >= fechaHoy() ? (
-                        <label className="grid gap-1 text-sm">
-                          Mover a otro bloque del día
-                          <select
-                            className={`${control} w-full`}
-                            disabled={guardando}
-                            value=""
-                            onChange={(e) =>
-                              void actuar(elegida, "reagendar", {
-                                fecha,
-                                hora: e.target.value,
-                              })
-                            }
-                          >
-                            <option value="">Elegir horario…</option>
-                            {bloques
-                              .filter(
-                                (b) =>
-                                  b.hora !== elegida.hora &&
-                                  b.usados < b.capacidad,
-                              )
-                              .map((b) => (
-                                <option key={b.hora} value={b.hora}>
-                                  {b.hora} · {b.capacidad - b.usados} libres
-                                </option>
-                              ))}
-                          </select>
-                        </label>
+                      {puedeReservar && elegida.estado === "AGENDADA" ? (
+                        <MoverCita
+                          bloques={bloques.filter((b) => b.hora !== elegida.hora && sePuedeReservar(fecha, b))}
+                          guardando={guardando}
+                          onMover={(hora) => void actuar(elegida, "reagendar", { fecha, hora })}
+                        />
                       ) : null}
                       <Link
                         className="btn border border-line bg-white"
@@ -599,23 +598,169 @@ export function Agenda() {
                   </>
                 ) : (
                   <>
-                    <div className="detail-empty">
-                      <PanelRightOpen aria-hidden />
-                      <h2 className="text-lg font-semibold">
-                        Detalle de la cita
-                      </h2>
-                    </div>
-                    <p className="mt-2 text-sm text-muted">
-                      Seleccione una persona para ver su ficha y gestionar la
-                      atención sin salir de la agenda.
-                    </p>
+                    <h2 className="text-lg font-semibold">Detalle de la cita</h2>
                   </>
                 )}
               </aside>
             </div>
           ) : null}
+          <dialog
+            ref={dialogo}
+            className="w-[min(24rem,calc(100%-2rem))] rounded-2xl border border-line bg-white p-5 text-ink shadow-2xl"
+            onClose={() => setSolicitud(null)}
+          >
+            <form
+              method="dialog"
+              className="grid gap-4"
+              onSubmit={(evento) => {
+                evento.preventDefault();
+                const pendiente = solicitud;
+                dialogo.current?.close();
+                if (!pendiente) return;
+                void actuar(pendiente.cita, "reagendar", { fecha, hora: pendiente.hora });
+              }}
+            >
+              <h2 className="text-lg font-semibold">Mover cita</h2>
+              <p>
+                {solicitud ? `${solicitud.cita.nombre} a las ${solicitud.hora}.` : ""}
+              </p>
+              <div className="flex justify-end gap-2">
+                <button type="button" className="btn border border-line bg-white" onClick={() => dialogo.current?.close()}>
+                  Cancelar
+                </button>
+                <button type="submit" className="btn bg-sky text-white">
+                  Confirmar
+                </button>
+              </div>
+            </form>
+          </dialog>
         </>
       ) : null}
     </section>
+  );
+}
+
+function MesAgenda({
+  mes,
+  activo,
+  dias,
+  laborables,
+  feriados,
+  onElegir,
+}: {
+  mes: string;
+  activo: string;
+  dias: DiaMes[];
+  laborables: number[];
+  feriados: string[];
+  onElegir: (fecha: string) => void;
+}) {
+  const hoy = fechaHoy();
+  const grilla = grillaLaborable(mes, [1, 2, 3, 4, 5, 6, 7]);
+  const mapa = new Map(dias.map((dia) => [dia.fecha, dia]));
+  return (
+    <div
+      className="grid gap-1"
+      style={{ gridTemplateColumns: `repeat(${grilla.etiquetas.length || 1}, minmax(0,1fr))` }}
+    >
+      {grilla.etiquetas.map((t) => (
+        <span key={t} className="py-2 text-center text-xs text-muted">
+          {t}
+        </span>
+      ))}
+      {grilla.celdas.map((f, i) => {
+        if (!f) return <span key={`v${i}`} />;
+        return (
+          <CeldaMes
+            key={f}
+            fecha={f}
+            hoy={hoy}
+            activo={activo === f}
+            dia={mapa.get(f)}
+            laboral={laborables.includes(diaSemanaIso(f))}
+            feriado={feriados.includes(f) || Boolean(mapa.get(f)?.feriado)}
+            onElegir={onElegir}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function MoverCita({
+  bloques,
+  guardando,
+  onMover,
+}: {
+  bloques: Bloque[];
+  guardando: boolean;
+  onMover: (hora: string) => void;
+}) {
+  if (bloques.length === 0) return null;
+  return (
+    <label className="grid gap-1 text-sm">
+      Mover a otro bloque del día
+      <select
+        className={`${control} w-full`}
+        disabled={guardando}
+        value=""
+        onChange={(e) => onMover(e.target.value)}
+      >
+        <option value="">Elegir horario…</option>
+        {bloques.map((b) => (
+          <option key={b.hora} value={b.hora}>
+            {b.hora} · {b.capacidad - b.usados} libres
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function CeldaMes({
+  fecha,
+  hoy,
+  activo,
+  dia,
+  laboral,
+  feriado,
+  onElegir,
+}: {
+  fecha: string;
+  hoy: string;
+  activo: boolean;
+  dia?: DiaMes;
+  laboral: boolean;
+  feriado: boolean;
+  onElegir: (fecha: string) => void;
+}) {
+  const pasado = fecha < hoy;
+  const libres = dia?.libres ?? 0;
+  const ocupacion = (dia?.atendidas ?? 0) > 0 ? dia?.atendidas ?? 0 : dia?.ocupados ?? 0;
+  const clase = feriado
+    ? "cal-feriado"
+    : !laboral
+      ? "cal-cerrado"
+      : pasado
+        ? "cal-pasado"
+        : libres > 0
+          ? "cal-libre"
+          : "cal-vacio";
+  const detalle = feriado
+    ? "Feriado"
+    : !laboral
+      ? "—"
+      : pasado
+        ? String(ocupacion)
+        : `${libres} libres`;
+  return (
+    <button
+      type="button"
+      className={`cal-dia ${clase} ${activo ? "is-active" : ""} ${fecha === hoy ? "is-today" : ""}`}
+      onClick={() => onElegir(fecha)}
+    >
+      <span className="font-medium">{Number(fecha.slice(8))}</span>
+      <span className="cal-meta">{detalle}</span>
+    </button>
   );
 }

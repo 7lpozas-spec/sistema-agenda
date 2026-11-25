@@ -14,7 +14,7 @@ import { enmascararRut, formatearRut, normalizarRut } from "./domain/rut";
 import { bloquesDeTipo } from "./servicios/reservas";
 import { evaluarTipo } from "./domain/reglas";
 import { puedeBloquear, puedeConfirmarAsistencia, puedeCrearCita, puedeExportar, puedeFotografiar, puedeMarcarResultado, puedeVerAgenda, puedeVerDashboard } from "./domain/permisos";
-import { fechaValida, partesEnZona, sumarDias } from "./domain/tiempo";
+import { bloquePosterior, fechaValida, partesEnZona, sumarDias } from "./domain/tiempo";
 import { correoValido, limpiarLinea, limpiarParrafo } from "./domain/texto";
 import { quitarExif } from "./domain/exif";
 import { detectarImagen } from "./domain/imagen";
@@ -23,7 +23,7 @@ import { hashContrasena, iteracionesDeEntorno, sha256Hex, tokenUrl, verificarCon
 import { ErrorApp, esObjeto } from "./http/error";
 import { auditar } from "./servicios/auditoria";
 import { armarCorreo, despachar, textoDocumentos } from "./servicios/correo";
-import { cuposDesdeAhora, diasLaborables, libresPorDia } from "./servicios/disponibilidad";
+import { cuposDesdeAhora, diasLaborables, feriadosDelMes, libresPorDia } from "./servicios/disponibilidad";
 import { regenerarCupos } from "./servicios/generar";
 import { armarEstadisticas, filtroDe, listadoCitas, type Estadisticas } from "./servicios/estadisticas";
 import { libroXlsx, reportePdf } from "./exportar/documentos";
@@ -231,30 +231,44 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     const agenda = exigirAgendaVisible(c.get("usuario"), c.req.param("id"));
     const mes = c.req.query("mes") ?? partesEnZona(new Date(), "America/Santiago").fecha.slice(0, 7);
     if (!/^\d{4}-\d{2}$/.test(mes)) throw new ErrorApp(400, "DATO_INVALIDO", "El mes debe tener la forma aaaa-mm.");
-    const filas = await c.env.DB.prepare(
-      `SELECT fecha, capacidad, usados, sobrecupo_tope, sobrecupo_usados FROM cupos_dia
-       WHERE agenda_id = ? AND fecha >= ? AND fecha < ? ORDER BY fecha`,
-    ).bind(agenda, `${mes}-01`, mesSiguiente(mes)).all();
-    const laborables = await diasLaborables(c.env.DB, agenda);
-    return c.json({ dias: filas.results, laborables });
+    const [dias, laborables, feriados] = await Promise.all([
+      libresPorDia(c.env.DB, new Date(), mes),
+      diasLaborables(c.env.DB, agenda),
+      feriadosDelMes(c.env.DB, mes),
+    ]);
+    return c.json({ dias: dias.filter((fila) => fila.agenda === agenda), laborables, feriados });
   });
 
   api.get("/agendas/:id/dia/:fecha", async (c) => {
     const agenda = exigirAgendaVisible(c.get("usuario"), c.req.param("id"));
     const fecha = c.req.param("fecha");
     if (!fechaValida(fecha)) throw new ErrorApp(400, "DATO_INVALIDO", "La fecha no es válida.");
-    const bloques = await c.env.DB.prepare(
-      "SELECT hora, capacidad, usados FROM cupos_bloque WHERE agenda_id = ? AND fecha = ? ORDER BY hora",
-    ).bind(agenda, fecha).all();
-    const citas = await c.env.DB.prepare(
-      `SELECT c.id, c.hora, c.estado, c.es_sobrecupo, c.docs_cargados, c.docs_requeridos, t.nombre AS tramite,
-              ci.rut, ci.nombres, ci.apellidos
-       FROM citas c JOIN ciudadanos ci ON ci.id = c.ciudadano_id JOIN tipos_tramite t ON t.id = c.tipo_tramite_id
-       WHERE c.agenda_id = ? AND c.fecha = ? AND c.estado NOT IN ('CANCELADA', 'ANULADA') ORDER BY c.hora`,
-    ).bind(agenda, fecha).all<{ rut: string; nombres: string; apellidos: string; hora: string; estado: string; es_sobrecupo: number; docs_cargados: number; docs_requeridos: number; tramite: string; id: string }>();
-    const laborables = await diasLaborables(c.env.DB, agenda);
+    const ahora = new Date();
+    const [bloques, citas, dia, feriado, bloqueo, laborables] = await Promise.all([
+      c.env.DB.prepare(
+        "SELECT hora, capacidad, usados FROM cupos_bloque WHERE agenda_id = ? AND fecha = ? ORDER BY hora",
+      ).bind(agenda, fecha).all<{ hora: string; capacidad: number; usados: number }>(),
+      c.env.DB.prepare(
+        `SELECT c.id, c.hora, c.estado, c.es_sobrecupo, c.docs_cargados, c.docs_requeridos, t.nombre AS tramite,
+                ci.rut, ci.nombres, ci.apellidos
+         FROM citas c JOIN ciudadanos ci ON ci.id = c.ciudadano_id JOIN tipos_tramite t ON t.id = c.tipo_tramite_id
+         WHERE c.agenda_id = ? AND c.fecha = ? AND c.estado NOT IN ('CANCELADA', 'ANULADA') ORDER BY c.hora`,
+      ).bind(agenda, fecha).all<{ rut: string; nombres: string; apellidos: string; hora: string; estado: string; es_sobrecupo: number; docs_cargados: number; docs_requeridos: number; tramite: string; id: string }>(),
+      c.env.DB.prepare("SELECT capacidad, usados FROM cupos_dia WHERE agenda_id = ? AND fecha = ?").bind(agenda, fecha).first<{ capacidad: number; usados: number }>(),
+      c.env.DB.prepare("SELECT 1 AS n FROM feriados WHERE fecha = ?").bind(fecha).first(),
+      c.env.DB.prepare("SELECT 1 AS n FROM excepciones_dia WHERE agenda_id = ? AND fecha = ? AND tipo = 'BLOQUEO'").bind(agenda, fecha).first(),
+      diasLaborables(c.env.DB, agenda),
+    ]);
+    const diaAbierto = Boolean(dia) && dia!.usados < dia!.capacidad && !feriado && !bloqueo;
+    const conMarca = bloques.results.map((bloque) => ({
+      ...bloque,
+      reservable: diaAbierto && bloque.usados < bloque.capacidad && bloquePosterior(fecha, bloque.hora, ahora),
+    }));
+    const libresBloque = conMarca.reduce((suma, bloque) => suma + (bloque.reservable ? Math.max(0, bloque.capacidad - bloque.usados) : 0), 0);
+    const libresDia = dia ? Math.max(0, dia.capacidad - dia.usados) : 0;
     return c.json({
-      bloques: bloques.results,
+      bloques: conMarca,
+      libres: diaAbierto ? Math.min(libresBloque, libresDia) : 0,
       laborables,
       citas: citas.results.map((cita) => ({ ...cita, rut: enmascararRut(cita.rut), nombre: `${cita.apellidos}, ${cita.nombres}` })),
     });
@@ -297,7 +311,7 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     const fecha = texto(cuerpo.fecha, "La fecha", 10, 10);
     const hora = texto(cuerpo.hora, "La hora", 5, 5);
     if (!fechaValida(fecha) || !/^\d{2}:\d{2}$/.test(hora)) throw new ErrorApp(400, "DATO_INVALIDO", "La fecha o la hora no es válida.");
-    await validarVentana(c.env.DB, tipo.agenda_id, fecha);
+    await validarVentana(c.env.DB, tipo.agenda_id, fecha, hora);
     const ciudadano = await guardarCiudadano(c.env.DB, cuerpo);
     const forzar = usuario.rol === "ADMIN" && cuerpo.forzarDuplicado === true;
     const activa = await c.env.DB.prepare("SELECT id, fecha, hora FROM citas WHERE ciudadano_id = ? AND agenda_id = ? AND estado = 'AGENDADA'")
@@ -386,7 +400,7 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     const cuerpo = await leerJson(c.req.raw);
     const fecha = texto(cuerpo.fecha, "La fecha", 10, 10);
     const hora = texto(cuerpo.hora, "La hora", 5, 5);
-    await validarVentana(c.env.DB, cita.agenda_id, fecha);
+    await validarVentana(c.env.DB, cita.agenda_id, fecha, hora);
     const tipo = await tipoPorId(c.env.DB, cita.tipo_tramite_id);
     const agenda = await c.env.DB.prepare("SELECT duracion_bloque_min FROM agendas WHERE id = ?").bind(cita.agenda_id).first<{ duracion_bloque_min: number }>();
     const bloques = bloquesDeTipo(tipo?.duracion_slot_min ?? null, agenda?.duracion_bloque_min ?? 15);
@@ -787,11 +801,12 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     if (!puedeVerDashboard(c.get("usuario").rol)) throw new ErrorApp(403, "SIN_PERMISO", "Su rol no tiene dashboard.");
     const hoy = partesEnZona(new Date(), "America/Santiago").fecha;
     const mes = c.req.query("mes") && /^\d{4}-\d{2}$/.test(c.req.query("mes") ?? "") ? c.req.query("mes")! : hoy.slice(0, 7);
-    const [dias, laborables] = await Promise.all([
+    const [dias, laborables, feriados] = await Promise.all([
       libresPorDia(c.env.DB, new Date(), mes),
       diasLaborables(c.env.DB),
+      feriadosDelMes(c.env.DB, mes),
     ]);
-    return c.json({ mes, dias, laborables });
+    return c.json({ mes, dias, laborables, feriados });
   });
 
   api.post("/bloques/bloquear", async (c) => {
@@ -896,7 +911,7 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     if (!fecha || !fechaValida(fecha) || !hora || !/^\d{2}:\d{2}$/.test(hora)) {
       throw new ErrorApp(400, "DATO_INVALIDO", "La fecha o la hora no es válida.");
     }
-    await validarVentana(c.env.DB, tipo.agenda_id, fecha);
+    await validarVentana(c.env.DB, tipo.agenda_id, fecha, hora);
     const agenda = await c.env.DB.prepare("SELECT duracion_bloque_min FROM agendas WHERE id = ?").bind(tipo.agenda_id).first<{ duracion_bloque_min: number }>();
     const bloques = bloquesDeTipo(tipo.duracion_slot_min, agenda?.duracion_bloque_min ?? 15);
     const tomado = await candado(c.env, tipo.agenda_id).tomar({
@@ -1170,10 +1185,14 @@ async function variablesCorreo(env: Env, persona: { nombres: string; apellidos: 
     logo_url: "/logo-recoleta.jpg",
   };
 }
-async function validarVentana(db: D1Database, agendaId: string, fecha: string) {
+async function validarVentana(db: D1Database, agendaId: string, fecha: string, hora?: string) {
   const agenda = await db.prepare("SELECT ventana_dias, permite_mismo_dia FROM agendas WHERE id = ?").bind(agendaId).first<{ ventana_dias: number; permite_mismo_dia: number }>();
-  const hoy = partesEnZona(new Date(), "America/Santiago").fecha;
+  const local = partesEnZona(new Date(), "America/Santiago");
+  const hoy = local.fecha;
   if (fecha < hoy) throw new ErrorApp(409, "FECHA_PASADA", "No se puede agendar en el pasado.");
+  if (hora && fecha === hoy && !bloquePosterior(fecha, hora, new Date())) {
+    throw new ErrorApp(409, "HORA_PASADA", "Ese horario de hoy ya pasó.");
+  }
   if (fecha === hoy && !agenda?.permite_mismo_dia) throw new ErrorApp(409, "MISMO_DIA", "Con la configuración actual la cita es desde el día siguiente.");
   if (fecha > sumarDias(hoy, agenda?.ventana_dias ?? 60)) throw new ErrorApp(409, "FUERA_DE_VENTANA", "Esa fecha está fuera de la ventana de agendamiento.");
   const feriado = await db.prepare("SELECT 1 AS n FROM feriados WHERE fecha = ?").bind(fecha).first();

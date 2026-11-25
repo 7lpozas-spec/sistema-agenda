@@ -87,8 +87,7 @@ export function CapturaMovil() {
   return (
     <main className="mx-auto grid min-h-screen max-w-md gap-4 px-4 py-6">
       <Marca />
-      <h1 className="text-2xl font-semibold">Captura de documentos</h1>
-      <p className="text-sm text-muted">{nombre ? `Documentos de ${nombre}. ` : ""}El enlace dura 15 minutos y queda ligado a este celular. La foto se comprime y se envía sin datos de ubicación.</p>
+      <h1 className="text-2xl font-semibold">{nombre ? `Documentos de ${nombre}` : "Captura de documentos"}</h1>
       {error ? <p role="alert" className="rounded-lg border border-alert px-3 py-2 text-sm text-alert">{error}</p> : null}
       {aviso ? <p role="status" className="rounded-lg border border-pine px-3 py-2 text-sm">Foto recibida. Ya puede verla en el computador de la oficina.</p> : null}
       <label className="grid gap-1 text-sm font-semibold">Documento
@@ -105,7 +104,6 @@ export function CapturaMovil() {
           capture="environment"
           onChange={(e) => void subir(e.target.files?.[0])}
         />
-        <span className="font-normal text-muted">Abre la cámara del celular o la galería.</span>
       </label>
       <button type="button" className="rounded-md bg-pine px-4 py-3 font-semibold text-white" disabled={enviando} onClick={() => document.querySelector<HTMLInputElement>("input[type=file]")?.click()}>
         {enviando ? "Enviando…" : "Subir foto"}

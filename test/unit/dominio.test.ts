@@ -4,7 +4,7 @@ import { evaluarTipo } from "../../src/domain/reglas";
 import { capacidadExaminador, generarDias, horasDeBloque } from "../../src/domain/cupos";
 import { digitoVerificador, enmascararRut, formatearRut, normalizarRut } from "../../src/domain/rut";
 import { tieneExif, quitarExif } from "../../src/domain/exif";
-import { diaIsoDeFecha, domingoDePascua } from "../../src/domain/tiempo";
+import { bloquePosterior, diaIsoDeFecha, domingoDePascua, partesEnZona } from "../../src/domain/tiempo";
 import type { TipoTramite } from "../../src/domain/catalogo";
 
 const control = {
@@ -62,6 +62,11 @@ describe("reglas de la especificación", () => {
     expect(fechas).not.toContain("2026-11-27");
     expect(diaIsoDeFecha("2026-11-28")).toBe(6);
     expect(domingoDePascua(2026)).toBe("2026-04-05");
+    const tarde = new Date("2026-11-25T18:26:00.000Z");
+    expect(partesEnZona(tarde, "America/Santiago")).toMatchObject({ fecha: "2026-11-25", hora: "15:26" });
+    expect(bloquePosterior("2026-11-25", "14:00", tarde)).toBe(false);
+    expect(bloquePosterior("2026-11-25", "15:26", tarde)).toBe(false);
+    expect(bloquePosterior("2026-11-26", "08:30", tarde)).toBe(true);
   });
 
   it("carga los 12 nombres exactos del catálogo", () => {

@@ -9,7 +9,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, fechaHoy } from "../api";
-import { Fecha, grillaLaborable, textoFecha } from "../fecha";
+import { Fecha, diaSemanaIso, grillaLaborable, textoFecha } from "../fecha";
 import { Aviso, Esqueleto } from "../ui";
 import { useVivo } from "../vivo";
 
@@ -36,6 +36,9 @@ interface DiaMes {
   agenda: string;
   fecha: string;
   libres: number;
+  ocupados?: number;
+  atendidas?: number;
+  feriado?: boolean;
 }
 
 const AGENDAS = [
@@ -52,6 +55,7 @@ export function Inicio() {
   const [mes, setMes] = useState(hoy.slice(0, 7));
   const [dias, setDias] = useState<DiaMes[]>([]);
   const [laborables, setLaborables] = useState<number[]>([1, 2, 3, 4, 5, 6]);
+  const [feriados, setFeriados] = useState<string[]>([]);
   const [elegido, setElegido] = useState<{
     agenda: string;
     fecha: string;
@@ -87,11 +91,12 @@ export function Inicio() {
   );
 
   const cargarMes = useCallback((valor: string) => {
-    void api<{ dias: DiaMes[]; laborables: number[] }>(
+    void api<{ dias: DiaMes[]; laborables: number[]; feriados?: string[] }>(
       `/api/disponibilidad/mes?mes=${valor}`,
     )
       .then((datos) => {
         setDias(datos.dias);
+        setFeriados(datos.feriados ?? []);
         setLaborables((actual) =>
           actual.join() === (datos.laborables ?? []).join()
             ? actual
@@ -197,9 +202,6 @@ export function Inicio() {
             {fechaLarga.charAt(0).toUpperCase() + fechaLarga.slice(1)}
           </p>
           <h1 className="page-title mt-1">Dashboard</h1>
-          <p className="mt-2 text-sm text-muted">
-            Disponibilidad y seguimiento de la atención.
-          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <a
@@ -249,12 +251,11 @@ export function Inicio() {
                     <CalendarCheck size={18} aria-hidden />
                   </span>
                 </div>
-                <p className="page-eyebrow mt-2">Próximo cupo disponible</p>
-                <p className="mt-1 text-[2rem] leading-none font-semibold tracking-tight tabular-nums">
-                  {proxima ? proxima.hora : "—"}
+                <p className="mt-3 text-[2rem] leading-none font-semibold tracking-tight tabular-nums">
+                  {proxima ? `${proxima.fecha.slice(8)}-${proxima.fecha.slice(5, 7)}` : "—"}
                 </p>
                 <p className="mt-1 text-sm text-muted">
-                  {proxima ? textoFecha(proxima.fecha) : "Sin horas"}
+                  {proxima ? proxima.hora : "Sin horas"}
                 </p>
                 {proxima ? (
                   <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -401,6 +402,7 @@ export function Inicio() {
             laborables={laborables}
             elegido={elegido?.agenda === agenda.id ? elegido.fecha : ""}
             horas={elegido?.agenda === agenda.id ? horas : []}
+            feriados={feriados}
             onElegir={(fecha) => setElegido({ agenda: agenda.id, fecha })}
           />
         ))}
@@ -417,6 +419,7 @@ function CalendarioMes({
   laborables,
   elegido,
   horas,
+  feriados,
   onElegir,
 }: {
   nombre: string;
@@ -426,12 +429,12 @@ function CalendarioMes({
   laborables: number[];
   elegido: string;
   horas: Hueco[];
+  feriados: string[];
   onElegir: (fecha: string) => void;
 }) {
-  const mapa = new Map(dias.map((dia) => [dia.fecha, dia.libres]));
-  const maximo = Math.max(1, ...dias.map((dia) => dia.libres));
+  const mapa = new Map(dias.map((dia) => [dia.fecha, dia]));
   const hoy = fechaHoy();
-  const grilla = grillaLaborable(mes, laborables);
+  const grilla = grillaLaborable(mes, [1, 2, 3, 4, 5, 6, 7]);
   return (
     <article className="superficie p-3 sm:p-4">
       <h3 className="mb-2 text-sm font-semibold">{nombre}</h3>
@@ -453,33 +456,34 @@ function CalendarioMes({
       >
         {grilla.celdas.map((fecha, indice) => {
           if (!fecha) return <span key={`v-${indice}`} />;
-          const libres = mapa.get(fecha) ?? 0;
+          const dia = mapa.get(fecha);
+          const libres = dia?.libres ?? 0;
           const activo = fecha === elegido;
           const pasado = fecha < hoy;
-          const intensidad = Math.min(1, libres / maximo);
+          const laboral = laborables.includes(diaSemanaIso(fecha));
+          const feriado = feriados.includes(fecha) || Boolean(dia?.feriado);
+          const ocupacion = (dia?.atendidas ?? 0) > 0 ? dia?.atendidas ?? 0 : dia?.ocupados ?? 0;
+          const clase = feriado
+            ? "cal-feriado"
+            : !laboral
+              ? "cal-cerrado"
+              : pasado
+                ? "cal-pasado"
+                : libres > 0
+                  ? "cal-libre"
+                  : "cal-vacio";
+          const detalle = feriado ? "Feriado" : !laboral ? "—" : pasado ? String(ocupacion) : `${libres} libres`;
           return (
             <button
               key={fecha}
               type="button"
-              disabled={libres <= 0}
+              disabled={feriado || !laboral || pasado || libres <= 0}
               onClick={() => onElegir(fecha)}
-              className={`flex min-h-11 flex-col items-start rounded-md px-1.5 py-1 text-left text-sm transition-colors disabled:opacity-100 ${activo ? "bg-pine text-white" : libres > 0 ? "text-ink hover:brightness-95" : pasado ? "bg-[#efeae3] text-[#5c564e]" : "bg-[#f7f3ee] text-[#8a8178]"} ${fecha === hoy && !activo ? "ring-2 ring-pine ring-offset-1" : ""}`}
-              style={
-                libres > 0 && !activo
-                  ? {
-                      background: `rgba(61, 95, 212, ${(0.08 + intensidad * 0.3).toFixed(3)})`,
-                    }
-                  : undefined
-              }
+              className={`cal-dia ${clase} ${activo ? "is-active" : ""} ${fecha === hoy ? "is-today" : ""}`}
+              aria-label={`${Number(fecha.slice(8))} ${detalle}`}
             >
               <span className="font-medium">{Number(fecha.slice(8))}</span>
-              {libres > 0 ? (
-                <span
-                  className={`mt-auto text-[11px] font-semibold tabular-nums ${activo ? "text-white/90" : "text-pine"}`}
-                >
-                  {libres}
-                </span>
-              ) : null}
+              <span className="cal-meta">{detalle}</span>
             </button>
           );
         })}

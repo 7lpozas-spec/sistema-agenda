@@ -1,7 +1,8 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
+import { digitoVerificador } from "../../src/domain/rut";
 import { partesEnZona } from "../../src/domain/tiempo";
-import { cuposDesdeAhora } from "../../src/servicios/disponibilidad";
+import { cuposDesdeAhora, libresPorDia } from "../../src/servicios/disponibilidad";
 import { entrar, llamar } from "../soporte";
 
 const ZONA = "America/Santiago";
@@ -94,5 +95,94 @@ describe("cupos desde ahora en America/Santiago", () => {
     const [dia, mes, anio] = (tarjeta?.proximaFecha?.fecha ?? "").split("-");
     expect(`${anio}-${mes}-${dia}`).toBe(primero?.fecha);
     expect(tarjeta?.proximaFecha?.hora).toBe(primero?.hora);
+  });
+
+  it("no cuenta bloques ya pasados y el calendario usa el mismo próximo cupo", async () => {
+    const ahora = new Date("2026-11-25T18:26:00.000Z");
+    expect(partesEnZona(ahora, ZONA)).toMatchObject({ fecha: "2026-11-25", hora: "15:26" });
+    await cupo("GENERAL", "2026-11-25", "10:00", 0, 3);
+    await env.DB.prepare(
+      `INSERT INTO cupos_dia (agenda_id, fecha, capacidad, usados, sobrecupo_tope, sobrecupo_usados)
+       VALUES ('GENERAL', '2026-11-26', 5, 0, 0, 0)`,
+    ).run();
+    for (const hora of ["08:30", "08:45", "09:00"]) {
+      await env.DB.prepare(
+        "INSERT INTO cupos_bloque (agenda_id, fecha, hora, capacidad, usados) VALUES ('GENERAL', '2026-11-26', ?, 3, 0)",
+      ).bind(hora).run();
+    }
+    await cupo("GENERAL", "2026-11-28", "08:30", 0, 3);
+
+    const lista = await cuposDesdeAhora(env.DB, "GENERAL", ahora, { limite: 8 });
+    const mes = await libresPorDia(env.DB, ahora, "2026-11");
+    const dia26 = mes.find((fila) => fila.agenda === "GENERAL" && fila.fecha === "2026-11-26");
+    const dia25 = mes.find((fila) => fila.agenda === "GENERAL" && fila.fecha === "2026-11-25");
+    expect(lista[0]).toMatchObject({ fecha: "2026-11-26", hora: "08:30" });
+    expect(lista.some((fila) => fila.fecha === "2026-11-25")).toBe(false);
+    expect(dia25?.libres ?? 0).toBe(0);
+    expect(dia26?.libres).toBe(5);
+    expect(mes.filter((fila) => fila.libres > 0).map((fila) => fila.fecha)[0]).toBe(lista[0]?.fecha);
+  });
+
+  it("marca como no reservables los bloques de un día ya cerrado", async () => {
+    const operador = await entrar("OPERADOR_AGENDA");
+    await cupo("GENERAL", "2020-01-06", "09:00", 1, 3);
+    const pasado = await llamar("/agendas/GENERAL/dia/2020-01-06", { sesion: operador });
+    expect(pasado.status).toBe(200);
+    const cuerpo = pasado.json as { libres: number; bloques: { hora: string; reservable: boolean }[] };
+    expect(cuerpo.libres).toBe(0);
+    expect(cuerpo.bloques.every((bloque) => bloque.reservable === false)).toBe(true);
+
+    await cupo("GENERAL", "2027-03-10", "09:00", 0, 2);
+    const futuro = await llamar("/agendas/GENERAL/dia/2027-03-10", { sesion: operador });
+    const abierto = futuro.json as { libres: number; bloques: { reservable: boolean }[] };
+    expect(abierto.libres).toBe(2);
+    expect(abierto.bloques[0]?.reservable).toBe(true);
+  });
+
+  it("rechaza reservar y reagendar en un bloque de hoy cuya hora ya pasó", async () => {
+    const operador = await entrar("OPERADOR_AGENDA");
+    const local = partesEnZona(new Date(), ZONA);
+    await env.DB.prepare("UPDATE agendas SET permite_mismo_dia = 1 WHERE id = 'GENERAL'").run();
+    await cupo("GENERAL", local.fecha, local.hora, 0, 2);
+    const cuerpo = 24000000 + (local.minutoDelDia % 1000);
+    const rut = `${cuerpo}-${digitoVerificador(String(cuerpo))}`;
+    const rechazada = await llamar("/citas", {
+      method: "POST",
+      sesion: operador,
+      body: {
+        tipoTramiteId: "CONTROL_RENOVACION",
+        fecha: local.fecha,
+        hora: local.hora,
+        ciudadano: { rut, nombres: "Nora", apellidos: "Hora Pasada", sinCorreo: true },
+      },
+    });
+    expect(rechazada.status).toBe(409);
+    expect((rechazada.json as { codigo?: string }).codigo).toBe("HORA_PASADA");
+
+    const manana = new Date(Date.UTC(
+      Number(local.fecha.slice(0, 4)),
+      Number(local.fecha.slice(5, 7)) - 1,
+      Number(local.fecha.slice(8, 10)) + 1,
+    )).toISOString().slice(0, 10);
+    await cupo("GENERAL", manana, "10:00", 0, 2);
+    const creada = await llamar("/citas", {
+      method: "POST",
+      sesion: operador,
+      body: {
+        tipoTramiteId: "CONTROL_RENOVACION",
+        fecha: manana,
+        hora: "10:00",
+        ciudadano: { rut, nombres: "Nora", apellidos: "Hora Pasada", sinCorreo: true },
+      },
+    });
+    expect(creada.status).toBe(201);
+    const id = (creada.json as { cita: { id: string } }).cita.id;
+    const movida = await llamar(`/citas/${id}/reagendar`, {
+      method: "POST",
+      sesion: operador,
+      body: { fecha: local.fecha, hora: local.hora },
+    });
+    expect(movida.status).toBe(409);
+    expect((movida.json as { codigo?: string }).codigo).toBe("HORA_PASADA");
   });
 });

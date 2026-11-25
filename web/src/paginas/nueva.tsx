@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { bloquePosterior } from "../../../src/domain/tiempo";
 import { api, fechaHoy } from "../api";
 import { useAuth } from "../auth";
 import { normalizarRut } from "../../../src/domain/rut";
@@ -17,6 +18,7 @@ interface Bloque {
   hora: string;
   capacidad: number;
   usados: number;
+  reservable?: boolean;
 }
 
 export function NuevaCita() {
@@ -88,7 +90,9 @@ export function NuevaCita() {
         setTelefono(c.telefono ?? "");
         setNacimiento(c.fecha_nacimiento ?? "");
         setAvisoPersona(
-          `Datos recuperados. Revise que estén vigentes.${datos.alertaInasistencias ? " Registra dos o más inasistencias." : ""}`,
+          datos.alertaInasistencias
+            ? "Datos recuperados. La persona registra dos o más inasistencias."
+            : "Datos recuperados.",
         );
       } else
         setAvisoPersona(
@@ -148,7 +152,7 @@ export function NuevaCita() {
       .then((datos) => {
         setBloques(datos.bloques);
         setHora((actual) =>
-          datos.bloques.some((b) => b.hora === actual && b.usados < b.capacidad)
+          datos.bloques.some((b) => b.hora === actual && horaVigente(fecha, b))
             ? actual
             : "",
         );
@@ -185,7 +189,7 @@ export function NuevaCita() {
     }
     if (
       !hora ||
-      !bloques.some((b) => b.hora === hora && b.usados < b.capacidad)
+      !bloques.some((b) => b.hora === hora && horaVigente(fecha, b))
     ) {
       setError("Seleccione un horario disponible.");
       return;
@@ -283,9 +287,6 @@ export function NuevaCita() {
             Cerrar
           </Link>
         </div>
-        <p className="text-sm text-muted">
-          Busque a la persona y confirme el trámite y el horario.
-        </p>
         <fieldset
           className="grid gap-3 rounded-xl border border-line bg-paper p-4"
           disabled={guardando}
@@ -398,7 +399,7 @@ export function NuevaCita() {
         {!cargandoHoras &&
         !errorHoras &&
         tipo?.agenda_id &&
-        !bloques.some((b) => b.usados < b.capacidad) ? (
+        !bloques.some((b) => horaVigente(fecha, b)) ? (
           <Aviso tono="info">No hay cupos disponibles para este día.</Aviso>
         ) : null}
         {tipo && !tipo.requiere_agenda ? (
@@ -411,7 +412,7 @@ export function NuevaCita() {
           <legend className="text-sm font-semibold">Hora</legend>
           <div className="flex flex-wrap gap-2">
             {bloques
-              .filter((bloque) => bloque.usados < bloque.capacidad)
+              .filter((bloque) => horaVigente(fecha, bloque))
               .map((bloque) => (
                 <label
                   key={bloque.hora}
@@ -526,4 +527,10 @@ export function NuevaCita() {
       </form>
     </div>
   );
+}
+
+function horaVigente(fecha: string, bloque: Bloque): boolean {
+  if (bloque.reservable === false) return false;
+  if (bloque.usados >= bloque.capacidad) return false;
+  return bloque.reservable === true || bloquePosterior(fecha, bloque.hora, new Date());
 }

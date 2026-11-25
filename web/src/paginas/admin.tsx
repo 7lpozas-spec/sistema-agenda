@@ -130,8 +130,8 @@ function Parametros() {
           </div>
         ))}
       </div>
-      <div className="sticky bottom-3 flex justify-end">
-        <Boton>Guardar parámetros</Boton>
+      <div className="flex justify-end pt-2">
+        <Boton>Guardar</Boton>
       </div>
     </form>
   );

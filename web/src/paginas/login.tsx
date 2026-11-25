@@ -44,33 +44,15 @@ export function Login() {
           fetchPriority="high"
           className="mb-8 h-auto w-[min(100%,220px)]"
         />
-        <h2>
-          Una atención más simple.
-          <br />
-          <span className="text-[#a9c0ff]">Una agenda más clara.</span>
-        </h2>
-        <p className="mt-5">
-          Organiza las reservas, consulta la disponibilidad y acompaña cada
-          atención desde un mismo lugar.
-        </p>
-        <p className="mt-12 text-xs tracking-widest uppercase">
-          Dirección de Tránsito · Recoleta
-        </p>
       </section>
       <div className="login-form-area">
         <div className="w-full max-w-[400px]">
-          <p className="page-eyebrow">Sistema de agendamiento</p>
           <form
             onSubmit={enviar}
             className="superficie mt-3 grid gap-5 p-6 sm:p-8"
             noValidate
           >
-            <div>
-              <h1 className="page-title">Ingreso</h1>
-              <p className="mt-2 text-sm text-muted">
-                Accede con tu cuenta de funcionario.
-              </p>
-            </div>
+            <h1 className="page-title">Ingreso</h1>
             {error ? (
               <p
                 role="alert"
@@ -116,9 +98,6 @@ export function Login() {
               {enviando ? "Entrando…" : "Entrar"}
             </button>
           </form>
-          <p className="mt-5 text-center text-xs text-muted">
-            Uso interno · Municipalidad de Recoleta
-          </p>
         </div>
       </div>
     </div>
