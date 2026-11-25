@@ -1,11 +1,16 @@
-import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { api, fechaHoy } from "../api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { api, fechaHoy, fechaHumana } from "../api";
 import { Fecha, grillaLaborable } from "../fecha";
 import { useAuth } from "../auth";
-import { Aviso, Esqueleto, Estado, Tabla, Vacio, avisar, tonoEstado } from "../ui";
+import { Aviso, Esqueleto, Estado, Vacio, avisar } from "../ui";
+import { useVivo } from "../vivo";
 
-interface Bloque { hora: string; capacidad: number; usados: number }
+interface Bloque {
+  hora: string;
+  capacidad: number;
+  usados: number;
+}
 interface Cita {
   id: string;
   hora: string;
@@ -13,202 +18,338 @@ interface Cita {
   nombre: string;
   rut: string;
   tramite: string;
+  docs_cargados?: number;
+  docs_requeridos?: number;
 }
-interface DiaMes { fecha: string; capacidad: number; usados: number }
-
-function sumar(iso: string, dias: number): string {
-  const [anio, mes, dia] = iso.split("-").map(Number);
-  return new Date(Date.UTC(anio, mes - 1, dia + dias)).toISOString().slice(0, 10);
+interface Dia {
+  fecha: string;
+  bloques: Bloque[];
+  citas: Cita[];
 }
-function lunesDe(iso: string): string {
-  const [anio, mes, dia] = iso.split("-").map(Number);
-  const semana = new Date(Date.UTC(anio, mes - 1, dia)).getUTCDay();
-  return sumar(iso, -(semana === 0 ? 6 : semana - 1));
+interface DiaMes {
+  fecha: string;
+  capacidad: number;
+  usados: number;
 }
-function CalendarioMes({ mes, dias, laborables, onElegir }: { mes: string; dias: DiaMes[]; laborables: number[]; onElegir: (fecha: string) => void }) {
-  const grilla = grillaLaborable(mes, laborables);
-  const mapa = new Map(dias.map((dia) => [dia.fecha, dia]));
-  const hoy = fechaHoy();
-  return (
-    <div className="superficie p-3 sm:p-4">
-      <div className="grid gap-1 text-center text-[11px] font-medium text-muted uppercase" style={{ gridTemplateColumns: `repeat(${grilla.etiquetas.length}, minmax(0, 1fr))` }}>
-        {grilla.etiquetas.map((dia) => <div key={dia}>{dia}</div>)}
-      </div>
-      <div className="mt-1 grid gap-1" style={{ gridTemplateColumns: `repeat(${grilla.etiquetas.length}, minmax(0, 1fr))` }}>
-        {grilla.celdas.map((fecha, indice) => {
-          if (!fecha) return <span key={`vacio-${indice}`} />;
-          const dia = mapa.get(fecha) ?? { fecha, usados: 0, capacidad: 0 };
-          const pasado = fecha < hoy;
-          return (
-            <button
-              key={fecha}
-              type="button"
-              className={`min-h-16 rounded-lg border p-2 text-left text-sm disabled:opacity-100 ${fecha === hoy ? "border-pine bg-white" : pasado ? "border-transparent bg-[#efeae3] text-[#5c564e]" : "border-line bg-white"}`}
-              onClick={() => onElegir(fecha)}
-            >
-              <span className="block font-semibold">{Number(fecha.slice(8))}</span>
-              {dia.capacidad > 0 ? (
-                <span className="mt-2 block h-1 overflow-hidden rounded-full bg-[#e8eef8]">
-                  <span className="block h-1 bg-sky" style={{ width: `${Math.min(100, Math.round((dia.usados / dia.capacidad) * 100))}%` }} />
-                </span>
-              ) : null}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
+function sumar(fecha: string, dias: number) {
+  const [a, m, d] = fecha.split("-").map(Number);
+  return new Date(Date.UTC(a, m - 1, d + dias)).toISOString().slice(0, 10);
 }
-
-const CORTOS = ["", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
-
-function mesLegible(iso: string): string {
-  const texto = new Intl.DateTimeFormat("es-CL", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${iso.slice(0, 7)}-01T12:00:00Z`));
-  return texto.charAt(0).toUpperCase() + texto.slice(1);
+function lunes(fecha: string) {
+  const n = new Date(`${fecha}T12:00:00Z`).getUTCDay();
+  return sumar(fecha, -(n === 0 ? 6 : n - 1));
 }
-
-function etiquetaCorta(iso: string): string {
-  const [anio, mes, dia] = iso.split("-").map(Number);
-  const js = new Date(Date.UTC(anio, mes - 1, dia)).getUTCDay();
-  return `${CORTOS[js === 0 ? 7 : js]} ${dia}`;
-}
-
-function nombreCorto(nombre: string): string {
-  return nombre.split(",")[1]?.trim().split(" ")[0] ?? nombre;
-}
+const control = "min-h-11 rounded-lg border border-line bg-white px-3 text-sm";
 
 export function Agenda() {
   const { agenda = "general" } = useParams();
+  const [params, setParams] = useSearchParams();
   const { usuario } = useAuth();
-  const [vista, setVista] = useState<"dia" | "semana" | "mes">("dia");
-  const [fecha, setFecha] = useState(fechaHoy());
-  const [bloques, setBloques] = useState<Bloque[] | null>(null);
-  const [citas, setCitas] = useState<Cita[]>([]);
-  const [semana, setSemana] = useState<{ fecha: string; bloques: Bloque[]; citas: Cita[] }[]>([]);
-  const [mes, setMes] = useState<DiaMes[] | null>(null);
-  const [laborables, setLaborables] = useState<number[]>([1, 2, 3, 4, 5, 6]);
-  const [error, setError] = useState("");
-  const [moviendo, setMoviendo] = useState("");
+  const vista = ["dia", "semana", "mes"].includes(params.get("vista") ?? "")
+    ? params.get("vista")!
+    : "dia";
+  const propuesta = params.get("fecha") ?? "";
+  const fecha =
+    /^\d{4}-\d{2}-\d{2}$/.test(propuesta) &&
+    !Number.isNaN(Date.parse(`${propuesta}T12:00:00Z`))
+      ? propuesta
+      : fechaHoy();
+  function navegar(dia: string, modo = vista) {
+    setParams({ fecha: dia, vista: modo });
+  }
   const agendaId = agenda === "primera_vez" ? "PRIMERA_VEZ" : "GENERAL";
-  const titulo = agenda === "primera_vez" ? "Agenda primera vez" : "Agenda general";
-  const puedeReservar = usuario?.rol === "ADMIN" || usuario?.rol === "OPERADOR_AGENDA";
-
-  function cargarDia(dia = fecha) {
-    setError("");
-    setBloques(null);
-    void api<{ bloques: Bloque[]; citas: Cita[]; laborables?: number[] }>(`/api/agendas/${agendaId}/dia/${dia}`)
-      .then((datos) => {
-        setBloques(datos.bloques);
-        setCitas(datos.citas);
-        if (datos.laborables?.length) {
-          setLaborables((actual) => (actual.join() === datos.laborables?.join() ? actual : datos.laborables ?? actual));
-        }
-      })
-      .catch((falla: unknown) => setError(falla instanceof Error ? falla.message : "No se pudo leer la agenda."));
-  }
-
+  const titulo =
+    agendaId === "GENERAL" ? "Agenda general" : "Agenda primera vez";
+  const puedeReservar =
+    usuario?.rol === "ADMIN" || usuario?.rol === "OPERADOR_AGENDA";
+  const [dias, setDias] = useState<Dia[]>([]);
+  const [mes, setMes] = useState<DiaMes[]>([]);
+  const [laborables, setLaborables] = useState([1, 2, 3, 4, 5, 6]);
+  const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState("");
+  const [revision, setRevision] = useState(0);
+  const [consulta, setConsulta] = useState("");
+  const [estado, setEstado] = useState("");
+  const [seleccionada, setSeleccionada] = useState("");
+  const [guardando, setGuardando] = useState(false);
+  const pendiente = useRef(false);
+  const panel = useRef<HTMLElement>(null);
+  const refrescar = useCallback(() => setRevision((n) => n + 1), []);
+  useVivo(refrescar);
   useEffect(() => {
+    window.addEventListener("focus", refrescar);
+    return () => window.removeEventListener("focus", refrescar);
+  }, [refrescar]);
+  useEffect(() => {
+    setSeleccionada("");
+  }, [agendaId, fecha, vista]);
+  useEffect(() => {
+    let activo = true;
     document.title = `${titulo} · Licencias Recoleta`;
-    if (vista === "dia") cargarDia(fecha);
-    if (vista === "semana") {
-      const inicio = lunesDe(fecha);
-      const dias = laborables.map((dia) => sumar(inicio, dia - 1));
-      void Promise.all(dias.map((dia) => api<{ bloques: Bloque[]; citas: Cita[] }>(`/api/agendas/${agendaId}/dia/${dia}`).then((datos) => ({ fecha: dia, bloques: datos.bloques, citas: datos.citas })).catch(() => ({ fecha: dia, bloques: [] as Bloque[], citas: [] as Cita[] }))))
-        .then(setSemana);
+    setCargando(true);
+    setError("");
+    setDias([]);
+    setMes([]);
+    async function cargar() {
+      try {
+        // Read the working days first, including when opening a week directly.
+        const disponibilidad = await api<{
+          dias: DiaMes[];
+          laborables: number[];
+        }>(`/api/agendas/${agendaId}/disponibilidad?mes=${fecha.slice(0, 7)}`);
+        if (!activo) return;
+        const habiles = disponibilidad.laborables;
+        setLaborables(habiles);
+        setMes(disponibilidad.dias);
+        if (vista !== "mes") {
+          const fechas =
+            vista === "dia"
+              ? [fecha]
+              : habiles.map((n) => sumar(lunes(fecha), n - 1));
+          const respuesta = await Promise.all(
+            fechas.map(async (f) => ({
+              fecha: f,
+              ...(await api<{ bloques: Bloque[]; citas: Cita[] }>(
+                `/api/agendas/${agendaId}/dia/${f}`,
+              )),
+            })),
+          );
+          if (activo) setDias(respuesta);
+        }
+      } catch (falla) {
+        if (activo)
+          setError(
+            falla instanceof Error
+              ? falla.message
+              : "No se pudo cargar la agenda.",
+          );
+      } finally {
+        if (activo) setCargando(false);
+      }
     }
-    if (vista === "mes") {
-      setMes(null);
-      void api<{ dias: DiaMes[]; laborables: number[] }>(`/api/agendas/${agendaId}/disponibilidad?mes=${fecha.slice(0, 7)}`)
-        .then((datos) => {
-          setMes(datos.dias);
-          setLaborables((actual) => (actual.join() === (datos.laborables ?? []).join() ? actual : (datos.laborables?.length ? datos.laborables : actual)));
-        })
-        .catch((falla: unknown) => setError(falla instanceof Error ? falla.message : "No se pudo leer el mes."));
-    }
-  }, [agenda, fecha, titulo, vista, laborables]);
+    void cargar();
+    return () => {
+      activo = false;
+    };
+  }, [agendaId, fecha, titulo, vista, revision]);
 
-  async function mover(citaId: string, hora: string, dia = fecha) {
-    if (!citaId || !puedeReservar) return;
+  async function actuar(
+    cita: Cita,
+    accion: "asistencia" | "reagendar",
+    body: object,
+  ) {
+    if (pendiente.current) return;
+    pendiente.current = true;
+    setGuardando(true);
     try {
-      await api(`/api/citas/${citaId}/reagendar`, { method: "POST", body: { fecha: dia, hora } });
-      avisar(`La cita quedó a las ${hora}.`);
-      cargarDia(dia);
+      await api(`/api/citas/${cita.id}/${accion}`, { method: "POST", body });
+      avisar(
+        accion === "asistencia"
+          ? "Asistencia actualizada."
+          : "Cita reagendada.",
+      );
+      refrescar();
     } catch (falla) {
-      avisar(falla instanceof Error ? falla.message : "No se pudo reagendar.", "error");
+      avisar(
+        falla instanceof Error
+          ? falla.message
+          : "No se pudo guardar el cambio.",
+        "error",
+      );
+    } finally {
+      pendiente.current = false;
+      setGuardando(false);
     }
   }
-
-  const columnas = semana.filter((dia) => dia.bloques.length > 0 || dia.citas.length > 0);
-  const horasSemana = [...new Set(columnas.flatMap((dia) => dia.bloques.map((bloque) => bloque.hora)))].sort();
+  const bloques = dias[0]?.bloques ?? [];
+  const citas = dias[0]?.citas ?? [];
+  const elegida = citas.find((c) => c.id === seleccionada);
+  const hayFiltro = Boolean(consulta.trim() || estado);
+  const filtradas = citas.filter(
+    (c) =>
+      (!estado || c.estado === estado) &&
+      `${c.nombre} ${c.tramite} ${c.hora}`
+        .toLocaleLowerCase()
+        .includes(consulta.trim().toLocaleLowerCase()),
+  );
+  const grilla = grillaLaborable(fecha.slice(0, 7), laborables);
+  const horas = [
+    ...new Set(dias.flatMap((d) => d.bloques.map((b) => b.hora))),
+  ].sort();
+  const vuelta = encodeURIComponent(
+    `/agenda/${agenda}?fecha=${fecha}&vista=${vista}`,
+  );
+  const nueva = (hora = "") =>
+    `/citas/nueva?agenda=${agenda}&fecha=${fecha}&hora=${hora}&volver=${vuelta}`;
 
   return (
     <section className="grid gap-5">
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-semibold">{titulo}</h1>
+          <p className="mt-1 text-sm text-muted">{fechaHumana(fecha)}</p>
         </div>
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex rounded-full border border-line bg-white p-1 shadow-sm" role="tablist" aria-label="Vista del calendario">
-            {(["dia", "semana", "mes"] as const).map((opcion) => (
-              <button key={opcion} type="button" role="tab" aria-selected={vista === opcion} className={`rounded-full px-3 py-1.5 text-sm transition-colors ${vista === opcion ? "bg-[#1e283c] text-white" : "text-muted hover:text-ink"}`} onClick={() => setVista(opcion)}>
-                {opcion === "dia" ? "Día" : opcion === "semana" ? "Semana" : "Mes"}
-              </button>
-            ))}
-          </div>
-          {vista === "mes" ? (
-            <div className="flex items-center gap-2">
-              <button type="button" className="h-10 w-10 rounded-lg border border-line bg-white" aria-label="Mes anterior" onClick={() => setFecha(sumar(fecha, -28).slice(0, 7) + "-01")}>‹</button>
-              <p className="min-w-36 text-center text-sm font-semibold">{mesLegible(fecha)}</p>
-              <button type="button" className="h-10 w-10 rounded-lg border border-line bg-white" aria-label="Mes siguiente" onClick={() => setFecha(sumar(fecha, 32).slice(0, 7) + "-01")}>›</button>
-            </div>
-          ) : (
-            <Fecha id="fecha-agenda" etiqueta="Día" valor={fecha} alCambiar={setFecha} />
-          )}
+        {puedeReservar ? (
+          <Link className="btn bg-sky text-white" to={nueva()}>
+            + Nueva cita
+          </Link>
+        ) : null}
+      </div>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="flex flex-wrap items-end gap-2">
+          <Fecha
+            id="fecha-agenda"
+            etiqueta="Fecha"
+            valor={fecha}
+            alCambiar={(f) => navegar(f)}
+          />
+          <button
+            type="button"
+            className={control}
+            onClick={() => navegar(fechaHoy(), "dia")}
+          >
+            Hoy
+          </button>
+        </div>
+        <div
+          className="flex gap-1 rounded-full border border-line bg-white p-1"
+          role="group"
+          aria-label="Vista del calendario"
+        >
+          {["dia", "semana", "mes"].map((v) => (
+            <button
+              type="button"
+              key={v}
+              aria-pressed={vista === v}
+              className={`min-h-10 rounded-full px-4 text-sm ${vista === v ? "bg-pine text-white" : "text-muted"}`}
+              onClick={() => navegar(fecha, v)}
+            >
+              {v === "dia" ? "Día" : v === "semana" ? "Semana" : "Mes"}
+            </button>
+          ))}
         </div>
       </div>
-      {error ? <Aviso>{error}</Aviso> : null}
-
-      {vista === "mes" ? (
-        mes === null && !error ? <Esqueleto /> : (
-          <CalendarioMes mes={fecha.slice(0, 7)} dias={mes ?? []} laborables={laborables} onElegir={(dia) => { setFecha(dia); setVista("dia"); }} />
-        )
+      {error ? (
+        <Aviso>
+          {error}{" "}
+          <button type="button" className="ml-2 underline" onClick={refrescar}>
+            Reintentar
+          </button>
+        </Aviso>
       ) : null}
-
-      {vista === "semana" ? (
-        semana.length === 0 ? <Esqueleto /> : columnas.length === 0 ? <Vacio texto="Sin cupos" /> : (
+      {cargando ? <Esqueleto /> : null}
+      {!cargando && !error && vista === "mes" ? (
+        <div className="superficie p-4">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <button
+              className={control}
+              aria-label="Mes anterior"
+              onClick={() =>
+                navegar(
+                  sumar(fecha.slice(0, 7) + "-01", -1).slice(0, 7) + "-01",
+                )
+              }
+            >
+              ‹
+            </button>
+            <h2 className="font-semibold">
+              {new Intl.DateTimeFormat("es-CL", {
+                month: "long",
+                year: "numeric",
+                timeZone: "UTC",
+              }).format(new Date(`${fecha}T12:00:00Z`))}
+            </h2>
+            <button
+              className={control}
+              aria-label="Mes siguiente"
+              onClick={() =>
+                navegar(
+                  sumar(fecha.slice(0, 7) + "-01", 32).slice(0, 7) + "-01",
+                )
+              }
+            >
+              ›
+            </button>
+          </div>
+          <div
+            className="grid gap-1"
+            style={{
+              gridTemplateColumns: `repeat(${grilla.etiquetas.length || 1}, minmax(0,1fr))`,
+            }}
+          >
+            {grilla.etiquetas.map((t) => (
+              <span key={t} className="py-2 text-center text-xs text-muted">
+                {t}
+              </span>
+            ))}
+            {grilla.celdas.map((f, i) => {
+              if (!f) return <span key={`v${i}`} />;
+              const dia = mes.find((d) => d.fecha === f);
+              const libres = Math.max(
+                0,
+                (dia?.capacidad ?? 0) - (dia?.usados ?? 0),
+              );
+              return (
+                <button
+                  key={f}
+                  className={`min-h-20 rounded-lg border p-2 text-left ${f === fechaHoy() ? "border-sky bg-[#eef3ff]" : "border-line bg-white"}`}
+                  onClick={() => navegar(f, "dia")}
+                >
+                  <span className="font-medium">{Number(f.slice(8))}</span>
+                  <span className="mt-2 block text-xs text-muted">
+                    {dia?.capacidad ? `${libres} libres` : "Sin bloques"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+      {!cargando && !error && vista === "semana" ? (
+        horas.length ? (
           <div className="superficie overflow-x-auto">
-            <table className="w-full min-w-[40rem] border-collapse text-left text-xs">
-              <caption className="sr-only">Semana de {titulo}</caption>
+            <table className="w-full min-w-[40rem] text-left text-sm">
+              <caption className="sr-only">Agenda semanal</caption>
               <thead>
                 <tr>
-                  <th className="px-3 py-2 font-medium text-muted">Hora</th>
-                  {columnas.map((dia) => (
-                    <th key={dia.fecha} className={`px-2 py-2 ${dia.fecha === fechaHoy() ? "text-sky" : dia.fecha < fechaHoy() ? "font-normal text-[#a8aeb8]" : ""}`}>
-                      {etiquetaCorta(dia.fecha)}
+                  <th className="p-3">Hora</th>
+                  {dias.map((d) => (
+                    <th className="p-3" key={d.fecha}>
+                      {new Intl.DateTimeFormat("es-CL", {
+                        weekday: "short",
+                        day: "numeric",
+                        timeZone: "UTC",
+                      }).format(new Date(`${d.fecha}T12:00:00Z`))}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {horasSemana.map((hora) => (
-                  <tr key={hora} className="border-t border-line">
-                    <th scope="row" className="px-3 py-1 font-medium text-muted">{hora}</th>
-                    {columnas.map((dia) => {
-                      const bloque = dia.bloques.find((item) => item.hora === hora);
-                      const personas = dia.citas.filter((cita) => cita.hora === hora);
+                {horas.map((h) => (
+                  <tr key={h} className="border-t border-line">
+                    <th scope="row" className="p-3 font-medium">{h}</th>
+                    {dias.map((d) => {
+                      const b = d.bloques.find((b) => b.hora === h);
+                      const personas = d.citas.filter((c) => c.hora === h);
                       return (
-                        <td key={dia.fecha} className="px-1 py-1">
-                          {bloque ? (
+                        <td key={d.fecha} className="p-1 align-top">
+                          {b ? (
                             <button
                               type="button"
-                              title={personas.length ? personas.map((cita) => cita.nombre).join(", ") : "Libre"}
-                              disabled={dia.fecha < fechaHoy()}
-                              className={`flex min-h-10 w-full flex-col justify-center gap-0.5 rounded-md px-1.5 py-1 text-left text-[11px] leading-tight transition-colors ${personas[0] ? tonoEstado(personas[0].estado) : "bg-transparent text-transparent hover:bg-[#f3efe9]"} ${dia.fecha < fechaHoy() ? "opacity-45" : ""} ${dia.fecha === fechaHoy() && personas.length ? "ring-1 ring-pine" : ""}`}
-                              onClick={() => { setFecha(dia.fecha); setVista("dia"); }}
+                              className="min-h-16 w-full rounded-lg bg-[#edf2fd] p-2 text-left"
+                              onClick={() => navegar(d.fecha, "dia")}
                             >
-                              {personas.map((cita) => nombreCorto(cita.nombre)).join(" · ")}
+                              <span className="block text-xs">
+                                {personas.map((c) => c.nombre).join(" · ") ||
+                                  "Sin citas"}
+                              </span>
+                              <span className="mt-2 block text-xs text-muted">
+                                {Math.max(0, b.capacidad - b.usados)} libres
+                              </span>
                             </button>
-                          ) : <span className="block h-10" />}
+                          ) : (
+                            <span className="text-xs text-muted">—</span>
+                          )}
                         </td>
                       );
                     })}
@@ -217,84 +358,231 @@ export function Agenda() {
               </tbody>
             </table>
           </div>
+        ) : (
+          <Vacio texto="Sin bloques habilitados esta semana" />
         )
       ) : null}
-
       {vista === "dia" ? (
         <>
-          {!bloques && !error ? <Esqueleto /> : null}
-          {bloques && bloques.length === 0 ? <Vacio texto="Sin cupos" /> : null}
-          {bloques && bloques.length > 0 ? (
-            <div className="superficie overflow-hidden">
-              {bloques.map((bloque) => {
-                const libres = Math.max(0, bloque.capacidad - bloque.usados);
-                const personas = citas.filter((cita) => cita.hora === bloque.hora);
-                const pasado = fecha < fechaHoy();
-                return (
-                  <div
-                    key={bloque.hora}
-                    className={`grid grid-cols-[4.5rem_1fr] border-t border-line first:border-t-0 ${pasado ? "opacity-55" : ""}`}
-                    onDragOver={(evento) => { if (puedeReservar) evento.preventDefault(); }}
-                    onDrop={(evento) => {
-                      evento.preventDefault();
-                      const id = evento.dataTransfer.getData("text/plain");
-                      void mover(id, bloque.hora);
-                    }}
-                  >
-                    <div className="px-3 pt-2 text-xs font-medium text-muted tabular-nums">{bloque.hora}</div>
-                    <div
-                      className="grid gap-1 py-1 pr-2"
-                      style={{ gridTemplateColumns: `repeat(${Math.max(personas.length, 1)}, minmax(0, 1fr))` }}
-                    >
-                      {personas.map((cita) => (
-                        <Link key={cita.id} to={`/citas/${cita.id}`} aria-label={`${nombreCorto(cita.nombre)}, ${cita.estado === "AGENDADA" ? "agendada" : cita.estado === "ASISTIO" ? "asistió" : cita.estado === "NO_ASISTIO" ? "no asistió" : cita.estado === "ATRASADO" ? "atrasado" : cita.estado}`} className={`flex min-h-11 items-center rounded-md px-2.5 py-1 text-sm transition-transform hover:-translate-y-px ${tonoEstado(cita.estado)}`}>
-                          <span className="truncate font-medium">{nombreCorto(cita.nombre)}</span>
-                        </Link>
-                      ))}
-                      {personas.length === 0 && puedeReservar && libres > 0 && fecha >= fechaHoy() ? (
-                        <Link aria-label={`Reservar ${bloque.hora}`} className="flex min-h-11 items-center rounded-md px-2.5 text-xs text-transparent transition-colors hover:bg-[#f3efe9] hover:text-muted focus-visible:text-muted" to={`/citas/nueva?agenda=${agenda}&fecha=${fecha}&hora=${bloque.hora}`}>
-                          Reservar
-                        </Link>
-                      ) : personas.length === 0 ? <span className="block min-h-11" /> : null}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+          <div className="flex flex-wrap gap-3">
+            <label className="min-w-0 flex-1">
+              <span className="sr-only">Buscar en el día</span>
+              <input
+                className={`${control} w-full`}
+                placeholder="Buscar por nombre, trámite u hora…"
+                value={consulta}
+                onChange={(e) => setConsulta(e.target.value)}
+              />
+            </label>
+            <label>
+              <span className="sr-only">Filtrar estado</span>
+              <select
+                className={control}
+                value={estado}
+                onChange={(e) => setEstado(e.target.value)}
+              >
+                <option value="">Todos los estados</option>
+                <option value="AGENDADA">Agendadas</option>
+                <option value="ASISTIO">Asistieron</option>
+                <option value="ATRASADO">Atrasados</option>
+                <option value="NO_ASISTIO">No asistieron</option>
+              </select>
+            </label>
+          </div>
+          {!cargando && !error && !bloques.length ? (
+            <Vacio texto="Sin bloques habilitados para este día" />
           ) : null}
-          <div>
-            <h2 className="text-xl font-semibold">Citas de este día</h2>
-            <div className="mt-3">
-              <Tabla
-                etiqueta={`Citas de ${titulo} el ${fecha}`}
-                vacio="Sin citas"
-                filas={citas}
-                columnas={[
-                  { id: "hora", titulo: "Hora", valor: (cita) => cita.hora, celda: (cita) => (
-                    <span draggable={puedeReservar && cita.estado === "AGENDADA"} onDragStart={(evento) => evento.dataTransfer.setData("text/plain", cita.id)} className={puedeReservar && cita.estado === "AGENDADA" ? "cursor-grab" : ""}>{cita.hora}</span>
-                  ) },
-                  { id: "nombre", titulo: "Persona", valor: (cita) => cita.nombre },
-                  { id: "tramite", titulo: "Trámite", valor: (cita) => cita.tramite },
-                  { id: "estado", titulo: "Estado", valor: (cita) => cita.estado, celda: (cita) => <Estado valor={cita.estado} /> },
-                  { id: "accion", titulo: "Acción", valor: () => "Abrir", celda: (cita) => (
-                    <span className="flex flex-wrap items-center gap-2">
-                      <Link className="underline" to={`/citas/${cita.id}`}>Abrir</Link>
-                      {puedeReservar && cita.estado === "AGENDADA" && bloques ? (
-                        <label className="text-xs">Mover
-                          <select className="ml-1 rounded-md border border-line" value={moviendo} onChange={(e) => { setMoviendo(""); void mover(cita.id, e.target.value); }}>
-                            <option value="">horario</option>
-                            {bloques.filter((bloque) => bloque.hora !== cita.hora && bloque.usados < bloque.capacidad).map((bloque) => (
-                              <option key={bloque.hora} value={bloque.hora}>{bloque.hora}</option>
-                            ))}
+          {!cargando && !error && bloques.length > 0 ? (
+            <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_19rem]">
+              <div className="superficie min-w-0 overflow-hidden">
+                <div className="flex flex-wrap justify-between gap-2 border-b border-line px-4 py-3 text-sm">
+                  <h2 className="font-semibold">Jornada del día</h2>
+                  <span className="text-muted" aria-live="polite">
+                    {citas.length} citas ·{" "}
+                    {bloques.reduce(
+                      (n, b) => n + Math.max(0, b.capacidad - b.usados),
+                      0,
+                    )}{" "}
+                    cupos de bloque libres
+                  </span>
+                </div>
+                {hayFiltro && !filtradas.length ? (
+                  <div className="p-5">
+                    <Vacio texto="No hay citas con ese filtro" />
+                  </div>
+                ) : null}
+                {bloques.map((b) => {
+                  const libres = Math.max(0, b.capacidad - b.usados);
+                  const personas = filtradas.filter((c) => c.hora === b.hora);
+                  if (hayFiltro && !personas.length) return null;
+                  return (
+                    <div
+                      key={b.hora}
+                      className="grid grid-cols-[3.5rem_minmax(0,1fr)] gap-2 border-b border-line p-3 last:border-b-0"
+                    >
+                      <div className="pt-2 text-sm font-medium tabular-nums">
+                        {b.hora}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                          {personas.map((c) => (
+                            <button
+                              type="button"
+                              key={c.id}
+                              aria-pressed={c.id === seleccionada}
+                              onClick={() => {
+                                setSeleccionada(c.id);
+                                requestAnimationFrame(() =>
+                                  panel.current?.focus(),
+                                );
+                              }}
+                              className={`min-w-0 rounded-lg border p-3 text-left ${c.id === seleccionada ? "border-sky bg-[#edf2fd] ring-1 ring-sky" : "border-line bg-white hover:border-sky"}`}
+                            >
+                              <span className="block break-words text-sm font-semibold">
+                                {c.nombre}
+                              </span>
+                              <span className="my-1.5 block text-xs text-muted">
+                                {c.tramite}
+                              </span>
+                              <Estado valor={c.estado} />
+                            </button>
+                          ))}
+                          {puedeReservar &&
+                          libres > 0 &&
+                          fecha >= fechaHoy() &&
+                          !hayFiltro ? (
+                            <Link
+                              aria-label={`Reservar ${b.hora}`}
+                              className="flex min-h-16 items-center justify-center rounded-lg border border-dashed border-[#b9c7e7] bg-[#f5f7fc] px-3 py-3 text-sm font-medium text-sky hover:bg-[#edf2fd]"
+                              to={nueva(b.hora)}
+                            >
+                              + Reservar · {libres}{" "}
+                              {libres === 1 ? "cupo" : "cupos"}
+                            </Link>
+                          ) : null}
+                        </div>
+                        <p className="mt-2 text-xs text-muted">
+                          {b.usados} de {b.capacidad} ocupados ·{" "}
+                          {libres ? `${libres} disponibles` : "Completo"}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <aside
+                ref={panel}
+                tabIndex={-1}
+                aria-label="Detalle de la cita"
+                className="superficie order-first p-5 xl:sticky xl:top-28 xl:order-last"
+              >
+                {elegida ? (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium uppercase tracking-wider text-muted">
+                        Detalle de la cita
+                      </span>
+                      <button
+                        type="button"
+                        className="min-h-10 min-w-10 rounded"
+                        aria-label="Cerrar ficha"
+                        onClick={() => setSeleccionada("")}
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <h2 className="mt-3 break-words text-xl font-semibold">
+                      {elegida.nombre}
+                    </h2>
+                    <p className="mb-3 mt-1 text-sm text-muted">
+                      {elegida.rut}
+                    </p>
+                    <Estado valor={elegida.estado} />
+                    <dl className="my-5 grid gap-3 text-sm">
+                      <div>
+                        <dt className="text-muted">Horario</dt>
+                        <dd>{elegida.hora} h</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted">Trámite</dt>
+                        <dd>{elegida.tramite}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted">Documentos</dt>
+                        <dd>
+                          {elegida.docs_cargados ?? 0} de{" "}
+                          {elegida.docs_requeridos ?? 0} cargados
+                        </dd>
+                      </div>
+                    </dl>
+                    <div className="grid gap-2">
+                      {elegida.estado === "AGENDADA" && fecha === fechaHoy() ? (
+                        <button
+                          type="button"
+                          disabled={guardando}
+                          className="btn bg-sky text-white"
+                          onClick={() =>
+                            void actuar(elegida, "asistencia", {
+                              estado: "ASISTIO",
+                            })
+                          }
+                        >
+                          {guardando ? "Guardando…" : "Marcar llegada"}
+                        </button>
+                      ) : null}
+                      {puedeReservar &&
+                      elegida.estado === "AGENDADA" &&
+                      fecha >= fechaHoy() ? (
+                        <label className="grid gap-1 text-sm">
+                          Mover a otro bloque del día
+                          <select
+                            className={`${control} w-full`}
+                            disabled={guardando}
+                            value=""
+                            onChange={(e) =>
+                              void actuar(elegida, "reagendar", {
+                                fecha,
+                                hora: e.target.value,
+                              })
+                            }
+                          >
+                            <option value="">Elegir horario…</option>
+                            {bloques
+                              .filter(
+                                (b) =>
+                                  b.hora !== elegida.hora &&
+                                  b.usados < b.capacidad,
+                              )
+                              .map((b) => (
+                                <option key={b.hora} value={b.hora}>
+                                  {b.hora} · {b.capacidad - b.usados} libres
+                                </option>
+                              ))}
                           </select>
                         </label>
                       ) : null}
-                    </span>
-                  ) },
-                ]}
-              />
+                      <Link
+                        className="btn border border-line bg-white"
+                        to={`/citas/${elegida.id}`}
+                      >
+                        Abrir ficha y documentos
+                      </Link>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <h2 className="text-lg font-semibold">
+                      Detalle de la cita
+                    </h2>
+                    <p className="mt-2 text-sm text-muted">
+                      Seleccione una persona para ver su ficha y gestionar la
+                      atención sin salir de la agenda.
+                    </p>
+                  </>
+                )}
+              </aside>
             </div>
-          </div>
+          ) : null}
         </>
       ) : null}
     </section>

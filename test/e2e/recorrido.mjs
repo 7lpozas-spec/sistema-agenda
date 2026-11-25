@@ -9,7 +9,7 @@ function clave(nombre) {
   if (!valor) throw new Error(`Falta ${nombre} en el entorno. No está en el repositorio.`);
   return valor;
 }
-const salida = "/opt/cursor/artifacts";
+const salida = process.env.ARTIFACTS_DIR ?? "test-results/recorrido";
 mkdirSync(salida, { recursive: true });
 
 function dv(cuerpo) {
@@ -43,7 +43,7 @@ async function entrar(page, correo, contrasena) {
   await page.getByRole("heading", { level: 1 }).first().waitFor();
 }
 
-const browser = await chromium.launch({ args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] });
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] });
 const contexto = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 const page = await contexto.newPage();
 page.setDefaultTimeout(90_000);
@@ -77,13 +77,13 @@ try {
   await page.getByText("08:30", { exact: true }).first().waitFor();
   await page.screenshot({ path: `${salida}/04-agenda-general.png`, fullPage: true });
   assert.equal(await page.getByText("08:30", { exact: true }).count() > 0, true);
-  await page.getByRole("tab", { name: "Semana" }).click();
+  await page.getByRole("button", { name: "Semana", exact: true }).click();
   await page.getByRole("rowheader", { name: "08:30" }).first().waitFor();
   await page.screenshot({ path: `${salida}/11-calendario-semana.png`, fullPage: true });
-  await page.getByRole("tab", { name: "Mes" }).click();
+  await page.getByRole("button", { name: "Mes", exact: true }).click();
   await page.getByRole("button", { name: "Mes siguiente" }).waitFor();
   await page.screenshot({ path: `${salida}/12-calendario-mes.png`, fullPage: true });
-  await page.getByRole("tab", { name: "Día" }).click();
+  await page.getByRole("button", { name: "Día", exact: true }).click();
   await page.goto(`${base}/citas/nueva`);
   await page.getByRole("heading", { name: "Nueva cita" }).waitFor();
   await page.screenshot({ path: `${salida}/05-nueva-cita.png`, fullPage: true });

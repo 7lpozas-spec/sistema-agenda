@@ -12,6 +12,7 @@
     "test:unit": "vitest run --config vitest.unit.config.ts --coverage",
     "test:integration": "vitest run --config vitest.config.ts",
     "test:e2e": "node test/e2e/recorrido.mjs",
+    "test:e2e:agenda": "node test/e2e/agenda-operativa.mjs",
     "test": "npm run test:unit && npm run test:integration",
     "db:migrate:local": "wrangler d1 migrations apply licencias_recoleta --local",
     "deploy:test": "node scripts/deploy-test.mjs"

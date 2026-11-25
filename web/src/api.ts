@@ -8,14 +8,29 @@ export class ErrorApi extends Error {
 }
 
 function csrf(): string {
-  const par = document.cookie.split("; ").find((item) => item.startsWith("lic_csrf="));
+  const par = document.cookie
+    .split("; ")
+    .find((item) => item.startsWith("lic_csrf="));
   return par ? decodeURIComponent(par.slice("lic_csrf=".length)) : "";
 }
 
-export async function api<T>(ruta: string, opciones: { method?: string; body?: unknown; form?: FormData; texto?: string } = {}): Promise<T> {
+export async function api<T>(
+  ruta: string,
+  opciones: {
+    method?: string;
+    body?: unknown;
+    form?: FormData;
+    texto?: string;
+    idempotencyKey?: string;
+    signal?: AbortSignal;
+  } = {},
+): Promise<T> {
   const method = opciones.method ?? "GET";
   const headers = new Headers();
-  if (method !== "GET" && method !== "HEAD") headers.set("x-csrf-token", csrf());
+  if (method !== "GET" && method !== "HEAD")
+    headers.set("x-csrf-token", csrf());
+  if (opciones.idempotencyKey)
+    headers.set("idempotency-key", opciones.idempotencyKey);
   let body: BodyInit | undefined;
   if (opciones.form) body = opciones.form;
   else if (opciones.texto !== undefined) {
@@ -25,12 +40,21 @@ export async function api<T>(ruta: string, opciones: { method?: string; body?: u
     headers.set("content-type", "application/json");
     body = JSON.stringify(opciones.body);
   }
-  const respuesta = await fetch(ruta, { method, headers, body, credentials: "same-origin" });
+  const respuesta = await fetch(ruta, {
+    method,
+    headers,
+    body,
+    credentials: "same-origin",
+    signal: opciones.signal,
+  });
   const tipo = respuesta.headers.get("content-type") ?? "";
   const datos = tipo.includes("json") ? await respuesta.json() : null;
   if (!respuesta.ok) {
     const codigo = datos?.codigo ?? datos?.error?.codigo ?? "ERROR";
-    const mensaje = datos?.mensaje ?? datos?.error?.mensaje ?? "No se pudo completar la operación.";
+    const mensaje =
+      datos?.mensaje ??
+      datos?.error?.mensaje ??
+      "No se pudo completar la operación.";
     throw new ErrorApi(codigo, mensaje);
   }
   return datos as T;

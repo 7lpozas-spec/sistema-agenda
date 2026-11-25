@@ -1216,8 +1216,7 @@ export async function tareasProgramadas(env: Env, ahora = new Date()): Promise<v
       agenda: cita.agenda_id === "PRIMERA_VEZ" ? "Agenda Primera Vez" : "Agenda General",
       documentos: textoDocumentos(cita), direccion: mapa.direccion_atencion ?? "", telefono: "", logo_url: "/logo-recoleta.jpg",
     }, cita.id, cita.email);
-    if (mensaje) await despachar(env, mensaje);
-    enviados.push(cita.id);
+    if (mensaje && await despachar(env, mensaje)) enviados.push(cita.id);
   }
   if (enviados.length > 0) {
     await env.DB.batch(enviados.map((id) =>

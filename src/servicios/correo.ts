@@ -27,10 +27,10 @@ export function crearCorreo(env: Env): MailSender {
       },
     };
   }
-  return { async enviar() { return { ok: true, id: `local-${crypto.randomUUID()}` }; } };
+  return { async enviar() { return { ok: false, error: "Correo no configurado: faltan MAIL_API_URL o MAIL_API_KEY. No se envió el mensaje." }; } };
 }
 
-export async function despachar(env: Env, mensaje: Mensaje): Promise<void> {
+export async function despachar(env: Env, mensaje: Mensaje): Promise<boolean> {
   const correo = crearCorreo(env);
   let estado = "ENVIADO";
   let error: string | null = null;
@@ -52,6 +52,7 @@ export async function despachar(env: Env, mensaje: Mensaje): Promise<void> {
   )
     .bind(crypto.randomUUID(), mensaje.citaId, mensaje.tipo, mensaje.destinatario, estado, proveedor, error, new Date().toISOString())
     .run();
+  return estado === "ENVIADO";
 }
 
 export async function armarCorreo(

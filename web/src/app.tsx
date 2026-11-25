@@ -117,7 +117,7 @@ function Marco() {
               }}
             >
               <Search size={14} />
-              Buscar
+              Secciones
               <kbd className="rounded border border-white/20 px-1 text-[10px]">⌘K</kbd>
             </button>
             <span className="hidden text-right sm:block">
@@ -162,12 +162,12 @@ function Marco() {
             if (destino) ir(destino);
           }}
         >
-          <label className="sr-only" htmlFor="comando">Buscar</label>
+          <label className="sr-only" htmlFor="comando">Buscar sección</label>
           <input
             id="comando"
             ref={campo}
             className="border-b border-line px-4 py-3.5 text-base outline-none"
-            placeholder="Buscar"
+            placeholder="Ir a una sección…"
             value={consulta}
             onChange={(evento) => {
               setConsulta(evento.target.value);

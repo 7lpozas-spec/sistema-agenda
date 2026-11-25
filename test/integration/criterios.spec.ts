@@ -199,12 +199,17 @@ describe("criterios de aceptación", () => {
     await tareasProgramadas(env, instanteLocal(hoy, "10:00", "America/Santiago"));
     await tareasProgramadas(env, instanteLocal(hoy, "10:00", "America/Santiago"));
     const correos = await env.DB.prepare("SELECT COUNT(*) AS n FROM correos_log WHERE cita_id = ? AND tipo = 'RECORDATORIO'").bind(citaRecordada).first<{ n: number }>();
-    expect(correos?.n).toBe(1);
+    // Sin proveedor configurado, cada intento queda como error y puede reintentarse.
+    expect(correos?.n).toBe(2);
+    const fallidos = await env.DB.prepare("SELECT COUNT(*) AS n FROM correos_log WHERE cita_id = ? AND tipo = 'RECORDATORIO' AND estado = 'ERROR'").bind(citaRecordada).first<{ n: number }>();
+    expect(fallidos?.n).toBe(2);
+    const marca = await env.DB.prepare("SELECT recordatorio_enviado_at FROM citas WHERE id = ?").bind(citaRecordada).first<{ recordatorio_enviado_at: string | null }>();
+    expect(marca?.recordatorio_enviado_at).toBeNull();
     await env.DB.prepare("UPDATE citas SET estado = 'CANCELADA' WHERE id = ?").bind(citaRecordada).run();
     await env.DB.prepare("UPDATE citas SET recordatorio_enviado_at = NULL WHERE id = ?").bind(citaRecordada).run();
     await tareasProgramadas(env, instanteLocal(hoy, "10:00", "America/Santiago"));
     const despues = await env.DB.prepare("SELECT COUNT(*) AS n FROM correos_log WHERE cita_id = ? AND tipo = 'RECORDATORIO'").bind(citaRecordada).first<{ n: number }>();
-    expect(despues?.n).toBe(1);
+    expect(despues?.n).toBe(2);
 
     await abrir("PRIMERA_VEZ", fecha, "08:30", 2, 4);
     const pv = await entrar("OPERADOR_AGENDA");
