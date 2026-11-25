@@ -146,7 +146,7 @@ export function CitaDetalle() {
 
   const instructor = usuario?.rol === "INSTRUCTOR" || usuario?.rol === "ADMIN";
   const puedeMover = usuario?.rol === "ADMIN" || usuario?.rol === "OPERADOR_AGENDA";
-  const puedeAsistencia = usuario?.rol === "ADMIN" || usuario?.rol === "OPERADOR_AGENDA" || (usuario?.rol === "INSTRUCTOR" && cita.agenda_id === "PRIMERA_VEZ");
+  const puedeAsistencia = usuario?.rol === "ADMIN" || usuario?.rol === "OPERADOR_AGENDA" || usuario?.rol === "RECEPCION" || (usuario?.rol === "INSTRUCTOR" && cita.agenda_id === "PRIMERA_VEZ");
 
   return (
     <article className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
@@ -157,7 +157,16 @@ export function CitaDetalle() {
             <p className="mt-1 text-sm text-muted">{cita.rutVisible ?? cita.rut}</p>
           </div>
           <Estado valor={cita.estado} />
+          <button type="button" className="btn border border-line bg-white" onClick={() => window.print()}>Imprimir</button>
         </div>
+        <section className="comprobante">
+          <p>Municipalidad de Recoleta</p>
+          <p>{cita.nombres} {cita.apellidos}</p>
+          <p>{cita.rutVisible ?? cita.rut}</p>
+          <p>{fechaHumana(cita.fecha)} · {cita.hora}</p>
+          <p>{cita.tramite ?? ""}</p>
+          <p>{cita.agenda_id === "PRIMERA_VEZ" ? "Primera vez" : "General"}</p>
+        </section>
         <p className="text-lg font-medium">{fechaHumana(cita.fecha)} · {cita.hora}</p>
         <dl className="grid gap-2 text-sm sm:grid-cols-2">
           <div><dt className="text-muted">Trámite</dt><dd className="font-medium">{cita.tramite ?? "—"}</dd></div>
@@ -173,6 +182,9 @@ export function CitaDetalle() {
             <button type="button" className="h-11 rounded-lg border border-line px-4 text-sm font-semibold" onClick={() => void asistencia("ATRASADO")}>Atrasado</button>
             <button type="button" className="h-11 rounded-lg border border-line px-4 text-sm font-semibold" onClick={() => void asistencia("NO_ASISTIO")}>No asistió</button>
           </div>
+        ) : null}
+        {puedeAsistencia && (cita.estado === "ASISTIO" || cita.estado === "ATRASADO") ? (
+          <button type="button" className="h-11 justify-self-start rounded-lg border border-line px-4 text-sm font-semibold" onClick={() => void asistencia("AGENDADA")}>Deshacer llegada</button>
         ) : null}
         {instructor && cita.agenda_id === "PRIMERA_VEZ" ? (
           <div className="flex flex-wrap gap-2">

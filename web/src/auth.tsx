@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, ErrorApi } from "./api";
 
-export type Rol = "ADMIN" | "OPERADOR_AGENDA" | "INSTRUCTOR";
+export type Rol = "ADMIN" | "OPERADOR_AGENDA" | "INSTRUCTOR" | "RECEPCION";
 
 export interface Usuario {
   id: string;
@@ -70,4 +70,5 @@ export const NOMBRE_ROL: Record<Rol, string> = {
   ADMIN: "Administración",
   OPERADOR_AGENDA: "Operador de agenda",
   INSTRUCTOR: "Instructor",
+  RECEPCION: "Recepción",
 };

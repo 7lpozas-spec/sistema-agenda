@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
 import { api, fechaHoy } from "../api";
 import { useAuth } from "../auth";
 import { Fecha } from "../fecha";
@@ -166,9 +167,12 @@ function Cuentas() {
       {error ? <Aviso>{error}</Aviso> : null}
       <ul className="grid gap-2">
         {usuarios.map((cuenta) => (
-          <li key={cuenta.id} className="flex flex-wrap justify-between gap-2 border border-line bg-card px-3 py-2 text-sm">
+          <li key={cuenta.id} className="flex flex-wrap items-center justify-between gap-2 border border-line bg-card px-3 py-2 text-sm">
             <span>{cuenta.nombre} · {cuenta.email}</span>
-            <span>{cuenta.rol} · {cuenta.activo ? "activa" : "inactiva"}</span>
+            <span className="flex flex-wrap items-center gap-2">
+              <span>{cuenta.rol} · {cuenta.activo ? "activa" : "inactiva"}</span>
+              <button type="button" className="underline" onClick={() => void api(`/api/usuarios/${cuenta.id}`, { method: "PATCH", body: { activo: !cuenta.activo } }).then(() => api<{ usuarios: Usuario[] }>("/api/usuarios").then((datos) => setUsuarios(datos.usuarios)))}>{cuenta.activo ? "Desactivar" : "Activar"}</button>
+            </span>
           </li>
         ))}
       </ul>
@@ -181,6 +185,7 @@ function Cuentas() {
             <option value="ADMIN">Administración</option>
             <option value="OPERADOR_AGENDA">Operador de agenda</option>
             <option value="INSTRUCTOR">Instructor</option>
+            <option value="RECEPCION">Recepción</option>
           </select>
         </Campo>
         <Campo id="clave-cuenta" etiqueta="Contraseña temporal" ayuda="Mínimo 12 caracteres, con mayúscula, minúscula y número.">
@@ -188,7 +193,39 @@ function Cuentas() {
         </Campo>
         <Boton>Crear cuenta</Boton>
       </form>
+      <ClaveCuenta usuarios={usuarios} />
     </div>
+  );
+}
+
+function ClaveCuenta({ usuarios }: { usuarios: Usuario[] }) {
+  const [id, setId] = useState(usuarios[0]?.id ?? "");
+  const [clave, setClave] = useState("");
+  const [error, setError] = useState("");
+  async function guardar(evento: FormEvent) {
+    evento.preventDefault();
+    setError("");
+    try {
+      await api(`/api/usuarios/${id}`, { method: "PATCH", body: { contrasena: clave } });
+      setClave("");
+    } catch (falla) {
+      setError(falla instanceof Error ? falla.message : "No se pudo cambiar la clave.");
+    }
+  }
+  return (
+    <form onSubmit={guardar} className="grid gap-3 border border-line bg-card p-4">
+      <h2 className="text-lg font-semibold">Nueva clave</h2>
+      {error ? <Aviso>{error}</Aviso> : null}
+      <Campo id="cuenta-clave" etiqueta="Cuenta">
+        <select id="cuenta-clave" className={claseCampo} value={id} onChange={(e) => setId(e.target.value)}>
+          {usuarios.map((cuenta) => <option key={cuenta.id} value={cuenta.id}>{cuenta.nombre}</option>)}
+        </select>
+      </Campo>
+      <Campo id="nueva-clave" etiqueta="Clave" ayuda="Mínimo 12 caracteres, con mayúscula, minúscula y número.">
+        <input id="nueva-clave" className={claseCampo} type="text" value={clave} onChange={(e) => setClave(e.target.value)} required />
+      </Campo>
+      <Boton>Guardar clave</Boton>
+    </form>
   );
 }
 
@@ -220,12 +257,48 @@ function Feriados() {
       <ul className="grid max-h-80 gap-1 overflow-auto text-sm">
         {filas?.filter((fila) => fila.activo === 1).map((fila) => <li key={fila.fecha}>{fila.fecha} · {fila.nombre}</li>)}
       </ul>
+      <Cierre />
       <form onSubmit={agregar} className="grid gap-3 sm:grid-cols-[10rem_1fr_auto] sm:items-end">
         <Fecha id="fecha-feriado" etiqueta="Fecha" valor={fecha} alCambiar={setFecha} />
         <Campo id="nombre-feriado" etiqueta="Nombre"><input id="nombre-feriado" className={claseCampo} value={nombre} onChange={(e) => setNombre(e.target.value)} required /></Campo>
         <Boton>Agregar</Boton>
       </form>
     </div>
+  );
+}
+
+function Cierre() {
+  const [agenda, setAgenda] = useState("GENERAL");
+  const [fecha, setFecha] = useState("");
+  const [motivo, setMotivo] = useState("");
+  const [citas, setCitas] = useState<{ id: string; hora: string; nombre: string }[]>([]);
+  const [error, setError] = useState("");
+  async function cerrar(evento: FormEvent) {
+    evento.preventDefault();
+    setError("");
+    try {
+      const respuesta = await api<{ citas: { id: string; hora: string; nombre: string }[] }>("/api/config/bloquear-dia", { method: "POST", body: { agendaId: agenda, fecha, motivo } });
+      setCitas(respuesta.citas);
+      setMotivo("");
+    } catch (falla) {
+      setError(falla instanceof Error ? falla.message : "No se pudo cerrar el día.");
+    }
+  }
+  return (
+    <form onSubmit={cerrar} className="grid gap-3 border border-line p-3">
+      <h2 className="text-sm font-semibold">Cierre</h2>
+      {error ? <Aviso>{error}</Aviso> : null}
+      <select className={claseCampo} value={agenda} onChange={(e) => setAgenda(e.target.value)} aria-label="Agenda del cierre">
+        <option value="GENERAL">General</option>
+        <option value="PRIMERA_VEZ">Primera vez</option>
+      </select>
+      <Fecha id="cierre-fecha" etiqueta="Fecha" valor={fecha} alCambiar={setFecha} />
+      <Campo id="cierre-motivo" etiqueta="Motivo"><input id="cierre-motivo" className={claseCampo} value={motivo} onChange={(e) => setMotivo(e.target.value)} required /></Campo>
+      <Boton>Bloquear día</Boton>
+      <ul className="grid gap-1 text-sm">
+        {citas.map((cita) => <li key={cita.id}><Link className="text-sky underline" to={`/citas/${cita.id}`}>{cita.hora} {cita.nombre}</Link></li>)}
+      </ul>
+    </form>
   );
 }
 

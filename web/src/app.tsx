@@ -20,6 +20,7 @@ import { NOMBRE_ROL, useAuth, type Rol } from "./auth";
 import { Admin } from "./paginas/admin";
 import { Agenda } from "./paginas/agenda";
 import { CitaDetalle } from "./paginas/cita";
+import { Atencion } from "./paginas/atencion";
 import { Inicio } from "./paginas/inicio";
 import { Login } from "./paginas/login";
 import { NuevaCita } from "./paginas/nueva";
@@ -28,7 +29,8 @@ import { ConexionViva } from "./vivo";
 function puede(rol: Rol, destino: string): boolean {
   if (rol === "ADMIN") return true;
   if (destino.startsWith("/admin")) return false;
-  if (destino === "/") return rol !== "INSTRUCTOR";
+  if (destino === "/") return true;
+  if (destino === "/atencion") return rol === "RECEPCION";
   if (destino === "/agenda/general") return rol === "OPERADOR_AGENDA";
   if (destino === "/agenda/primera_vez")
     return rol === "OPERADOR_AGENDA" || rol === "INSTRUCTOR";
@@ -42,6 +44,7 @@ export function App() {
       <Route path="/login" element={<Login />} />
       <Route element={<Marco />}>
         <Route path="/" element={<Inicio />} />
+        <Route path="/atencion" element={<Atencion />} />
         <Route path="/agenda/:agenda" element={<Agenda />} />
         <Route path="/citas/nueva" element={<NuevaCita />} />
         <Route path="/citas/:id" element={<CitaDetalle />} />
@@ -64,6 +67,7 @@ function Marco() {
   const enlaces = useMemo(() => {
     if (!usuario) return [];
     const base = [
+      ["/atencion", "Atención"],
       ["/", "Dashboard"],
       ["/agenda/general", "Agenda general"],
       ["/agenda/primera_vez", "Primera vez"],
@@ -73,6 +77,7 @@ function Marco() {
   }, [usuario]);
 
   const iconos = {
+    "/atencion": ClipboardCheck,
     "/": LayoutDashboard,
     "/agenda/general": CalendarDays,
     "/agenda/primera_vez": ClipboardCheck,
@@ -101,8 +106,8 @@ function Marco() {
 
   if (!listo) return <div className="min-h-screen bg-paper" />;
   if (!usuario) return <Navigate to="/login" replace />;
-  if (usuario.rol === "INSTRUCTOR" && location.pathname === "/")
-    return <Navigate to="/agenda/primera_vez" replace />;
+  if (usuario.rol === "RECEPCION" && location.pathname === "/login")
+    return <Navigate to="/atencion" replace />;
 
   function ir(href: string) {
     setAbierto(false);

@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { bloquePosterior } from "../../../src/domain/tiempo";
 import { api, fechaHoy } from "../api";
 import { useAuth } from "../auth";
-import { normalizarRut } from "../../../src/domain/rut";
+import { mascaraRut, normalizarRut } from "../../../src/domain/rut";
 import { Fecha } from "../fecha";
 import { Aviso, Campo, claseCampo } from "../ui";
 
@@ -300,11 +300,20 @@ export function NuevaCita() {
                 <input
                   id="rut"
                   className={claseCampo}
+                  autoFocus
+                  inputMode="text"
+                  autoComplete="off"
                   value={rut}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void buscarPersona();
+                    }
+                  }}
                   onChange={(e) => {
                     consultaRut.current++;
                     setBuscando(false);
-                    setRut(e.target.value);
+                    setRut(mascaraRut(e.target.value));
                     setAvisoPersona("");
                     setActivas([]);
                     setNombres("");

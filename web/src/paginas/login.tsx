@@ -14,7 +14,7 @@ export function Login() {
     document.title = "Ingreso · Licencias Recoleta";
   }, []);
 
-  if (listo && usuario) return <Navigate to="/" replace />;
+  if (listo && usuario) return <Navigate to={usuario.rol === "RECEPCION" ? "/atencion" : "/"} replace />;
 
   async function enviar(evento: FormEvent) {
     evento.preventDefault();

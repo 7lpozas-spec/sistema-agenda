@@ -1,11 +1,4 @@
-import {
-  CalendarCheck,
-  Clock3,
-  Percent,
-  UserX,
-  XCircle,
-  ArrowUpRight,
-} from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, fechaHoy } from "../api";
@@ -13,528 +6,342 @@ import { Fecha, diaSemanaIso, grillaLaborable, textoFecha } from "../fecha";
 import { Aviso, Esqueleto } from "../ui";
 import { useVivo } from "../vivo";
 
-interface Tramo {
-  total: number;
-  asistieron: number;
-  noAsistieron: number;
-  atrasados: number;
-  canceladas: number;
-  tasa: number | null;
+interface Hueco { fecha: string; hora: string; libres: number }
+interface DiaMes { agenda: string; fecha: string; libres: number; ocupados?: number; atendidas?: number; feriado?: boolean }
+interface Kpis {
+  total: number; asistieron: number; noAsistieron: number; atrasados: number; canceladas: number; tasa: number | null;
+  anterior: { total: number; asistieron: number; noAsistieron: number; atrasados: number; canceladas: number; tasa: number | null };
 }
-interface Kpis extends Tramo {
-  anterior: Tramo;
+interface Actividad {
+  nombre: string; rol: string; agenda: string;
+  creadas: number; reagendadas: number; canceladas: number; asistencias: number;
+  anterior: { creadas: number; reagendadas: number; canceladas: number; asistencias: number };
 }
-interface Hueco {
-  fecha: string;
-  hora: string;
-  libres: number;
+interface Panel {
+  vista: "admin" | "operador" | "instructor" | "recepcion";
+  puedeAgendar: boolean;
+  exportar: boolean;
+  hoy: { fecha: string; citados: number; llegaron: number; faltan: number; inasistencias: number; aTiempo: number; atrasados: number; proxima: { id: string; hora: string; nombre: string; tramite: string } | null };
+  periodo: { citados: number; llegaron: number; aTiempo: number; atrasados: number; inasistencias: number; esperaMin: number | null; anterior: { citados: number; llegaron: number; aTiempo: number; atrasados: number; inasistencias: number } };
+  flujo: { hora: string; citados: number; llegaron: number }[];
+  proximosDias: { fecha: string; citados: number }[];
+  huecos: { agenda: string; proxima: Hueco | null; siguientes: Hueco[] }[];
+  kpis: Kpis | null;
+  kpisPorAgenda: { agenda: string; total: number; asistieron: number; noAsistieron: number; atrasados: number }[];
+  mes: { dias: DiaMes[]; feriados: string[]; laborables: number[] };
+  actividad: { filas: Actividad[]; recientes: { at: string; quien: string; accion: string; persona: string; agenda: string; fecha: string; hora: string }[] };
+  relevantes: { inasistencias: { nombre: string; n: number }[]; repetidas: { nombre: string; n: number }[]; tramites: { nombre: string; citas: number }[]; ocupacion: { hora: string; citas: number }[] };
 }
-interface Huecos {
-  agendas: { agenda: string; proxima: Hueco | null; siguientes: Hueco[] }[];
-}
-interface DiaMes {
-  agenda: string;
-  fecha: string;
-  libres: number;
-  ocupados?: number;
-  atendidas?: number;
-  feriado?: boolean;
-}
-
-const AGENDAS = [
-  { id: "GENERAL", ruta: "general", nombre: "Agenda general" },
-  { id: "PRIMERA_VEZ", ruta: "primera_vez", nombre: "Agenda primera vez" },
-] as const;
 
 export function Inicio() {
   const hoy = fechaHoy();
   const [desde, setDesde] = useState(() => sumar(hoy, -21));
   const [hasta, setHasta] = useState(hoy);
-  const [kpis, setKpis] = useState<Kpis | null>(null);
-  const [huecos, setHuecos] = useState<Huecos | null>(null);
   const [mes, setMes] = useState(hoy.slice(0, 7));
-  const [dias, setDias] = useState<DiaMes[]>([]);
-  const [laborables, setLaborables] = useState<number[]>([1, 2, 3, 4, 5, 6]);
-  const [feriados, setFeriados] = useState<string[]>([]);
-  const [elegido, setElegido] = useState<{
-    agenda: string;
-    fecha: string;
-  } | null>(null);
-  const [horas, setHoras] = useState<Hueco[]>([]);
+  const [panel, setPanel] = useState<Panel | null>(null);
   const [error, setError] = useState("");
-  const [cargando, setCargando] = useState(true);
 
-  const cargar = useCallback(
-    (filtros = { desde, hasta }) => {
-      const params = new URLSearchParams({
-        desde: filtros.desde,
-        hasta: filtros.hasta,
-      });
-      setCargando(true);
-      setError("");
-      void Promise.all([
-        api<{ kpis: Kpis }>(`/api/estadisticas?${params}`),
-        api<Huecos>("/api/huecos"),
-      ])
-        .then(([estadisticas, disponibilidad]) => {
-          setKpis(estadisticas.kpis);
-          setHuecos(disponibilidad);
-        })
-        .catch((falla: unknown) =>
-          setError(
-            falla instanceof Error ? falla.message : "No se pudo cargar.",
-          ),
-        )
-        .finally(() => setCargando(false));
-    },
-    [desde, hasta],
-  );
-
-  const cargarMes = useCallback((valor: string) => {
-    void api<{ dias: DiaMes[]; laborables: number[]; feriados?: string[] }>(
-      `/api/disponibilidad/mes?mes=${valor}`,
-    )
-      .then((datos) => {
-        setDias(datos.dias);
-        setFeriados(datos.feriados ?? []);
-        setLaborables((actual) =>
-          actual.join() === (datos.laborables ?? []).join()
-            ? actual
-            : datos.laborables?.length
-              ? datos.laborables
-              : actual,
-        );
-      })
-      .catch((falla: unknown) =>
-        setError(
-          falla instanceof Error ? falla.message : "No se pudo leer el mes.",
-        ),
-      );
-  }, []);
+  const cargar = useCallback(() => {
+    const params = new URLSearchParams({ desde, hasta, mes });
+    void api<Panel>(`/api/panel?${params}`)
+      .then((datos) => { setPanel(datos); setError(""); })
+      .catch((falla: unknown) => setError(falla instanceof Error ? falla.message : "No se pudo cargar."));
+  }, [desde, hasta, mes]);
 
   useEffect(() => {
     document.title = "Dashboard · Licencias Recoleta";
     cargar();
   }, [cargar]);
-  useEffect(() => {
-    cargarMes(mes);
-  }, [cargarMes, mes]);
-  useVivo(
-    useCallback(() => {
-      cargar();
-      cargarMes(mes);
-    }, [cargar, cargarMes, mes]),
-  );
+  useVivo(useCallback(() => cargar(), [cargar]));
 
-  useEffect(() => {
-    if (!elegido) {
-      setHoras([]);
-      return;
-    }
-    const ruta = elegido.agenda === "PRIMERA_VEZ" ? "PRIMERA_VEZ" : "GENERAL";
-    void api<Huecos>(`/api/huecos?agenda=${ruta}&dia=${elegido.fecha}`)
-      .then((datos) => setHoras(datos.agendas[0]?.siguientes ?? []))
-      .catch(() => setHoras([]));
-  }, [elegido]);
-
-  const fechaLarga = new Intl.DateTimeFormat("es-CL", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    timeZone: "America/Santiago",
-  }).format(new Date());
+  if (!panel && !error) return <Esqueleto />;
+  const vista = panel?.vista ?? "operador";
+  const exportAgenda = vista === "instructor" ? "PRIMERA_VEZ" : vista === "operador" ? "GENERAL" : "";
   const qs = new URLSearchParams({ desde, hasta });
-  const tarjetas = kpis
-    ? [
-        {
-          etiqueta: "Agendadas",
-          valor: String(kpis.total),
-          delta: kpis.total - kpis.anterior.total,
-          icono: CalendarCheck,
-          sube: true,
-        },
-        {
-          etiqueta: "Asistencia",
-          valor: String(kpis.asistieron),
-          delta: kpis.asistieron - kpis.anterior.asistieron,
-          icono: CalendarCheck,
-          sube: true,
-        },
-        {
-          etiqueta: "Tasa",
-          valor: kpis.tasa === null ? "—" : `${kpis.tasa}%`,
-          delta:
-            kpis.tasa === null || kpis.anterior.tasa === null
-              ? null
-              : kpis.tasa - kpis.anterior.tasa,
-          icono: Percent,
-          sube: true,
-        },
-        {
-          etiqueta: "Inasistencias",
-          valor: String(kpis.noAsistieron),
-          delta: kpis.noAsistieron - kpis.anterior.noAsistieron,
-          icono: UserX,
-          sube: false,
-        },
-        {
-          etiqueta: "Atrasos",
-          valor: String(kpis.atrasados),
-          delta: kpis.atrasados - kpis.anterior.atrasados,
-          icono: Clock3,
-          sube: false,
-        },
-        {
-          etiqueta: "Cancelaciones",
-          valor: String(kpis.canceladas),
-          delta: kpis.canceladas - kpis.anterior.canceladas,
-          icono: XCircle,
-          sube: false,
-        },
-      ]
-    : [];
+  if (exportAgenda) qs.set("agenda", exportAgenda);
 
   return (
     <section className="grid gap-5">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="text-sm text-muted">
-            {fechaLarga.charAt(0).toUpperCase() + fechaLarga.slice(1)}
-          </p>
-          <h1 className="page-title mt-1">Dashboard</h1>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <a
-            className="h-9 rounded-lg border border-line bg-white px-3 text-sm font-medium leading-9"
-            href={`/api/export/estadisticas.csv?${qs}`}
-          >
-            CSV
-          </a>
-          <a
-            className="h-9 rounded-lg bg-[#1e283c] px-3 text-sm font-semibold leading-9 text-white"
-            href={`/api/export/estadisticas.xlsx?${qs}`}
-          >
-            Descargar Excel
-          </a>
-          <a
-            className="h-9 rounded-lg border border-line bg-white px-3 text-sm font-medium leading-9"
-            href={`/api/export/reporte-diario.pdf?fecha=${hoy}`}
-          >
-            PDF
-          </a>
-        </div>
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <h1 className="page-title">Dashboard</h1>
+        {panel?.exportar ? (
+          <div className="flex flex-wrap gap-2">
+            <a className="h-9 rounded-lg border border-line bg-white px-3 text-sm font-medium leading-9" href={`/api/export/estadisticas.csv?${qs}`}>CSV</a>
+            <a className="h-9 rounded-lg bg-[#1e283c] px-3 text-sm font-semibold leading-9 text-white" href={`/api/export/estadisticas.xlsx?${qs}`}>Excel</a>
+            <a className="h-9 rounded-lg border border-line bg-white px-3 text-sm font-medium leading-9" href={`/api/export/reporte-diario.pdf?fecha=${hoy}${exportAgenda ? `&agenda=${exportAgenda}` : ""}`}>PDF</a>
+          </div>
+        ) : null}
       </header>
-
       {error ? <Aviso>{error}</Aviso> : null}
-      {cargando && !kpis ? <Esqueleto /> : null}
-
-      {huecos ? (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {AGENDAS.map((agenda) => {
-            const fila = huecos.agendas.find(
-              (item) => item.agenda === agenda.id,
-            );
-            const proxima = fila?.proxima ?? null;
-            const siguientes = (fila?.siguientes ?? [])
-              .filter(
-                (hueco) =>
-                  !proxima ||
-                  hueco.fecha !== proxima.fecha ||
-                  hueco.hora !== proxima.hora,
-              )
-              .slice(0, 3);
-            return (
-              <article key={agenda.id} className="availability-card">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm font-semibold">{agenda.nombre}</p>
-                  <span className="rounded-md bg-[#edf3ff] p-2 text-sky">
-                    <CalendarCheck size={18} aria-hidden />
-                  </span>
-                </div>
-                <p className="mt-3 text-[2rem] leading-none font-semibold tracking-tight tabular-nums">
-                  {proxima ? `${proxima.fecha.slice(8)}-${proxima.fecha.slice(5, 7)}` : "—"}
-                </p>
-                <p className="mt-1 text-sm text-muted">
-                  {proxima ? proxima.hora : "Sin horas"}
-                </p>
-                {proxima ? (
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <Link
-                      className="btn bg-sky text-white"
-                      to={`/citas/nueva?agenda=${agenda.ruta}&fecha=${proxima.fecha}&hora=${proxima.hora}`}
-                    >
-                      Agendar <ArrowUpRight size={15} aria-hidden />
-                    </Link>
-                    {siguientes.map((hueco) => (
-                      <Link
-                        key={`${hueco.fecha}-${hueco.hora}`}
-                        className="btn border border-line bg-white text-ink hover:bg-paper"
-                        to={`/citas/nueva?agenda=${agenda.ruta}&fecha=${hueco.fecha}&hora=${hueco.hora}`}
-                      >
-                        {hueco.fecha === proxima.fecha
-                          ? hueco.hora
-                          : `${hueco.fecha.slice(8)}-${hueco.fecha.slice(5, 7)} ${hueco.hora}`}
-                      </Link>
-                    ))}
-                  </div>
-                ) : null}
-              </article>
-            );
-          })}
+      {panel && vista === "recepcion" ? <Recepcion panel={panel} /> : null}
+      {panel && vista === "instructor" ? <Instructor panel={panel} /> : null}
+      {panel && (vista === "operador" || vista === "admin") ? <Oficina panel={panel} /> : null}
+      <form className="flex flex-wrap items-end gap-3" onSubmit={(e) => { e.preventDefault(); cargar(); }}>
+        <Fecha id="dash-desde" etiqueta="Desde" valor={desde} alCambiar={setDesde} laborables={panel?.mes.laborables} />
+        <Fecha id="dash-hasta" etiqueta="Hasta" valor={hasta} alCambiar={setHasta} laborables={panel?.mes.laborables} />
+        <button className="h-10 rounded-lg border border-line bg-white px-4 text-sm font-medium" type="submit">Filtrar</button>
+      </form>
+      {panel?.kpis ? <KpiFila kpis={panel.kpis} /> : null}
+      {panel && vista === "admin" ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {panel.kpisPorAgenda.map((fila) => (
+            <article key={fila.agenda} className="superficie px-4 py-3">
+              <p className="text-sm font-semibold">{fila.agenda === "PRIMERA_VEZ" ? "Primera vez" : "General"}</p>
+              <p className="mt-1 text-sm tabular-nums">{fila.total} citas · {fila.asistieron} asistencias · {fila.noAsistieron} inasistencias · {fila.atrasados} atrasos</p>
+            </article>
+          ))}
         </div>
-      ) : (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {[0, 1].map((item) => (
-            <div
-              key={item}
-              className="h-32 animate-pulse rounded-2xl bg-[#e6e8ee]"
+      ) : null}
+      {panel && vista !== "recepcion" ? (
+        <div className={`grid gap-4 ${vista === "admin" ? "xl:grid-cols-2" : ""}`}>
+          {(vista === "admin" ? ["GENERAL", "PRIMERA_VEZ"] : [vista === "instructor" ? "PRIMERA_VEZ" : "GENERAL"]).map((agenda) => (
+            <Calendario
+              key={agenda}
+              nombre={agenda === "PRIMERA_VEZ" ? "Primera vez" : "General"}
+              mes={mes}
+              dias={panel.mes.dias.filter((dia) => dia.agenda === agenda)}
+              laborables={panel.mes.laborables}
+              feriados={panel.mes.feriados}
+              onMes={(delta) => setMes(moverMes(mes, delta))}
             />
           ))}
         </div>
-      )}
-
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <h2 className="text-lg font-semibold">{rangoCorto(desde, hasta)}</h2>
-        <form
-          className="flex flex-wrap items-end gap-3"
-          onSubmit={(evento) => {
-            evento.preventDefault();
-            cargar();
-          }}
-        >
-          <Fecha
-            id="dash-desde"
-            etiqueta="Desde"
-            valor={desde}
-            alCambiar={setDesde}
-            laborables={laborables}
-          />
-          <Fecha
-            id="dash-hasta"
-            etiqueta="Hasta"
-            valor={hasta}
-            alCambiar={setHasta}
-            laborables={laborables}
-          />
-          <button
-            className="h-10 rounded-lg border border-line bg-white px-4 text-sm font-medium"
-            type="submit"
-          >
-            Filtrar
-          </button>
-        </form>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-        {tarjetas.map((tarjeta) => {
-          const favorable =
-            tarjeta.delta === null
-              ? true
-              : tarjeta.sube
-                ? tarjeta.delta >= 0
-                : tarjeta.delta <= 0;
-          return (
-            <article
-              key={tarjeta.etiqueta}
-              className="superficie metric-card px-4 py-4"
-            >
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-medium text-muted">
-                  {tarjeta.etiqueta}
-                </p>
-                <tarjeta.icono size={16} className="text-sky" aria-hidden />
-              </div>
-              <p className="mt-2 text-2xl leading-none font-semibold tabular-nums">
-                {tarjeta.valor}
-              </p>
-              <p
-                className={`mt-2 text-xs font-medium tabular-nums ${tarjeta.delta === null ? "text-transparent" : favorable ? "text-[#146c43]" : "text-alert"}`}
-              >
-                {tarjeta.delta === null
-                  ? "0"
-                  : `${tarjeta.delta >= 0 ? "+" : ""}${tarjeta.delta}`}
-                {tarjeta.delta !== null ? (
-                  <span className="ml-1 font-normal text-muted">
-                    vs. anterior
-                  </span>
-                ) : null}
-              </p>
-            </article>
-          );
-        })}
-      </div>
-
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold">{tituloMes(mes)}</h2>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            className="h-10 rounded-lg border border-line bg-white px-3 text-sm"
-            aria-label="Mes anterior"
-            onClick={() => {
-              setMes(moverMes(mes, -1));
-              setElegido(null);
-            }}
-          >
-            ‹
-          </button>
-          <button
-            type="button"
-            className="h-10 rounded-lg border border-line bg-white px-3 text-sm"
-            aria-label="Mes siguiente"
-            onClick={() => {
-              setMes(moverMes(mes, 1));
-              setElegido(null);
-            }}
-          >
-            ›
-          </button>
-        </div>
-      </div>
-      <div className="grid gap-4 xl:grid-cols-2">
-        {AGENDAS.map((agenda) => (
-          <CalendarioMes
-            key={agenda.id}
-            nombre={agenda.nombre}
-            ruta={agenda.ruta}
-            mes={mes}
-            dias={dias.filter((fila) => fila.agenda === agenda.id)}
-            laborables={laborables}
-            elegido={elegido?.agenda === agenda.id ? elegido.fecha : ""}
-            horas={elegido?.agenda === agenda.id ? horas : []}
-            feriados={feriados}
-            onElegir={(fecha) => setElegido({ agenda: agenda.id, fecha })}
-          />
-        ))}
-      </div>
+      ) : null}
+      {panel ? <Actividad panel={panel} /> : null}
+      {panel && vista !== "recepcion" ? <Relevantes panel={panel} /> : null}
     </section>
   );
 }
 
-function CalendarioMes({
-  nombre,
-  ruta,
-  mes,
-  dias,
-  laborables,
-  elegido,
-  horas,
-  feriados,
-  onElegir,
-}: {
-  nombre: string;
-  ruta: string;
-  mes: string;
-  dias: DiaMes[];
-  laborables: number[];
-  elegido: string;
-  horas: Hueco[];
-  feriados: string[];
-  onElegir: (fecha: string) => void;
-}) {
-  const mapa = new Map(dias.map((dia) => [dia.fecha, dia]));
-  const hoy = fechaHoy();
-  const grilla = grillaLaborable(mes, [1, 2, 3, 4, 5, 6, 7]);
+function Oficina({ panel }: { panel: Panel }) {
+  const general = panel.huecos.find((fila) => fila.agenda === "GENERAL");
+  const primera = panel.huecos.find((fila) => fila.agenda === "PRIMERA_VEZ");
   return (
-    <article className="superficie p-3 sm:p-4">
-      <h3 className="mb-2 text-sm font-semibold">{nombre}</h3>
-      <div
-        className="grid gap-1 text-center text-[11px] font-medium text-muted uppercase"
-        style={{
-          gridTemplateColumns: `repeat(${grilla.etiquetas.length}, minmax(0, 1fr))`,
-        }}
-      >
-        {grilla.etiquetas.map((dia) => (
-          <span key={dia}>{dia}</span>
-        ))}
+    <div className="grid gap-3">
+      {general ? <Tarjeta agenda="general" nombre="Agenda general" hueco={general} grande puedeAgendar={panel.puedeAgendar} /> : null}
+      {primera && panel.vista === "operador" ? (
+        <article className="superficie flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <p className="text-sm font-semibold">Primera vez</p>
+          <p className="text-sm tabular-nums">{primera.proxima ? `${primera.proxima.fecha.slice(8)}-${primera.proxima.fecha.slice(5, 7)} ${primera.proxima.hora}` : "Sin horas"}</p>
+          {panel.puedeAgendar && primera.proxima ? <Link className="btn bg-sky text-white" to={`/citas/nueva?agenda=primera_vez&fecha=${primera.proxima.fecha}&hora=${primera.proxima.hora}`}>Agendar</Link> : null}
+        </article>
+      ) : null}
+      {panel.vista === "admin" && primera ? <Tarjeta agenda="primera_vez" nombre="Primera vez" hueco={primera} grande puedeAgendar={panel.puedeAgendar} /> : null}
+    </div>
+  );
+}
+
+function Instructor({ panel }: { panel: Panel }) {
+  const hueco = panel.huecos[0];
+  return (
+    <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_18rem]">
+      <article className="superficie p-4">
+        <p className="text-sm font-semibold">Hoy</p>
+        {panel.hoy.proxima ? (
+          <Link className="mt-2 block" to={`/citas/${panel.hoy.proxima.id}`}>
+            <p className="text-3xl font-semibold tabular-nums">{panel.hoy.proxima.hora}</p>
+            <p className="text-lg">{panel.hoy.proxima.nombre}</p>
+            <p className="text-sm text-muted">{panel.hoy.proxima.tramite}</p>
+          </Link>
+        ) : <p className="mt-2 text-sm text-muted">Sin pendientes</p>}
+        <p className="mt-3 text-sm tabular-nums">{panel.hoy.faltan} pendientes · {panel.hoy.llegaron} llegaron · {panel.hoy.inasistencias} inasistencias</p>
+        <Link className="btn mt-3 border border-line bg-white" to="/agenda/primera_vez">Abrir día</Link>
+      </article>
+      {hueco ? <Tarjeta agenda="primera_vez" nombre="Próximo cupo" hueco={hueco} grande={false} puedeAgendar={false} /> : null}
+    </div>
+  );
+}
+
+function Recepcion({ panel }: { panel: Panel }) {
+  const maximo = Math.max(1, ...panel.flujo.map((fila) => fila.citados));
+  return (
+    <div className="grid gap-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <Mini etiqueta="Citados" valor={panel.hoy.citados} />
+        <Mini etiqueta="Llegaron" valor={panel.hoy.llegaron} />
+        <Mini etiqueta="A tiempo" valor={panel.hoy.aTiempo} />
+        <Mini etiqueta="Atrasos" valor={panel.hoy.atrasados} />
       </div>
-      <div
-        className="mt-1 grid gap-1"
-        style={{
-          gridTemplateColumns: `repeat(${grilla.etiquetas.length}, minmax(0, 1fr))`,
-        }}
-      >
-        {grilla.celdas.map((fecha, indice) => {
-          if (!fecha) return <span key={`v-${indice}`} />;
-          const dia = mapa.get(fecha);
-          const libres = dia?.libres ?? 0;
-          const activo = fecha === elegido;
-          const pasado = fecha < hoy;
-          const laboral = laborables.includes(diaSemanaIso(fecha));
-          const feriado = feriados.includes(fecha) || Boolean(dia?.feriado);
-          const ocupacion = (dia?.atendidas ?? 0) > 0 ? dia?.atendidas ?? 0 : dia?.ocupados ?? 0;
-          const clase = feriado
-            ? "cal-feriado"
-            : !laboral
-              ? "cal-cerrado"
-              : pasado
-                ? "cal-pasado"
-                : libres > 0
-                  ? "cal-libre"
-                  : "cal-vacio";
-          const detalle = feriado ? "Feriado" : !laboral ? "—" : pasado ? String(ocupacion) : `${libres} libres`;
-          return (
-            <button
-              key={fecha}
-              type="button"
-              disabled={feriado || !laboral || pasado || libres <= 0}
-              onClick={() => onElegir(fecha)}
-              className={`cal-dia ${clase} ${activo ? "is-active" : ""} ${fecha === hoy ? "is-today" : ""}`}
-              aria-label={`${Number(fecha.slice(8))} ${detalle}`}
-            >
-              <span className="font-medium">{Number(fecha.slice(8))}</span>
-              <span className="cal-meta">{detalle}</span>
-            </button>
-          );
-        })}
+      <div className="grid gap-3 lg:grid-cols-3">
+        <article className="superficie p-4">
+          <p className="text-sm font-semibold">Período</p>
+          <p className="mt-2 text-sm tabular-nums">{panel.periodo.llegaron} llegaron · {panel.periodo.aTiempo} a tiempo · {panel.periodo.atrasados} atrasos · {panel.periodo.inasistencias} inasistencias</p>
+          <p className="mt-1 text-xs text-muted">{delta(panel.periodo.llegaron, panel.periodo.anterior.llegaron)} llegaron</p>
+          {panel.periodo.esperaMin !== null ? <p className="mt-2 text-sm tabular-nums">Espera {panel.periodo.esperaMin} min</p> : null}
+        </article>
+        <article className="superficie p-4">
+          <p className="text-sm font-semibold">Por hora</p>
+          <ul className="mt-2 grid gap-1">
+            {panel.flujo.map((fila) => (
+              <li key={fila.hora} className="grid grid-cols-[3.2rem_minmax(0,1fr)_2rem] items-center gap-2 text-sm">
+                <span className="tabular-nums">{fila.hora}</span>
+                <span className="h-2 rounded bg-[#d9e4ff]" style={{ width: `${Math.round((fila.llegaron / maximo) * 100)}%` }} />
+                <span className="tabular-nums">{fila.llegaron}</span>
+              </li>
+            ))}
+          </ul>
+        </article>
+        <article className="superficie p-4">
+          <p className="text-sm font-semibold">Próximos días</p>
+          <ul className="mt-2 grid gap-1 text-sm">
+            {panel.proximosDias.map((fila) => <li key={fila.fecha} className="flex justify-between tabular-nums"><span>{textoFecha(fila.fecha).slice(0, 5)}</span><span>{fila.citados}</span></li>)}
+          </ul>
+        </article>
       </div>
-      {elegido ? (
-        <div className="mt-3 flex flex-wrap gap-2 border-t border-line pt-3">
-          {horas.length === 0 ? (
-            <p className="text-sm text-muted">Sin horas</p>
-          ) : (
-            horas.map((hueco) => (
-              <Link
-                key={hueco.hora}
-                className="h-9 rounded-full bg-[#1e283c] px-3 text-sm font-medium leading-9 text-white"
-                to={`/citas/nueva?agenda=${ruta}&fecha=${hueco.fecha}&hora=${hueco.hora}`}
-              >
-                {hueco.hora}
-              </Link>
-            ))
-          )}
+    </div>
+  );
+}
+
+function Tarjeta({ agenda, nombre, hueco, grande, puedeAgendar }: { agenda: string; nombre: string; hueco: Panel["huecos"][number]; grande: boolean; puedeAgendar: boolean }) {
+  const proxima = hueco.proxima;
+  return (
+    <article className="availability-card">
+      <p className="text-sm font-semibold">{nombre}</p>
+      <p className={`${grande ? "text-[2rem]" : "text-2xl"} mt-2 font-semibold tabular-nums`}>{proxima ? `${proxima.fecha.slice(8)}-${proxima.fecha.slice(5, 7)}` : "—"}</p>
+      <p className="text-sm text-muted">{proxima ? proxima.hora : "Sin horas"}</p>
+      {puedeAgendar && proxima ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Link className="btn bg-sky text-white" to={`/citas/nueva?agenda=${agenda}&fecha=${proxima.fecha}&hora=${proxima.hora}`}>Agendar <ArrowUpRight size={15} aria-hidden /></Link>
+          {hueco.siguientes.map((item) => (
+            <Link key={`${item.fecha}-${item.hora}`} className="btn border border-line bg-white" to={`/citas/nueva?agenda=${agenda}&fecha=${item.fecha}&hora=${item.hora}`}>{item.fecha === proxima.fecha ? item.hora : `${item.fecha.slice(8)}-${item.fecha.slice(5, 7)} ${item.hora}`}</Link>
+          ))}
         </div>
       ) : null}
     </article>
   );
 }
 
-function tituloMes(mes: string): string {
-  const texto = new Intl.DateTimeFormat("es-CL", {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(`${mes}-01T12:00:00Z`));
-  return texto.charAt(0).toUpperCase() + texto.slice(1);
+function KpiFila({ kpis }: { kpis: Kpis }) {
+  const filas = [
+    ["Agendadas", kpis.total, kpis.anterior.total],
+    ["Asistencia", kpis.asistieron, kpis.anterior.asistieron],
+    ["Tasa", kpis.tasa === null ? "—" : `${kpis.tasa}%`, kpis.anterior.tasa],
+    ["Inasistencias", kpis.noAsistieron, kpis.anterior.noAsistieron],
+    ["Atrasos", kpis.atrasados, kpis.anterior.atrasados],
+    ["Cancelaciones", kpis.canceladas, kpis.anterior.canceladas],
+  ] as const;
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      {filas.map(([etiqueta, valor, antes]) => (
+        <article key={etiqueta} className="superficie px-4 py-3">
+          <p className="text-xs font-medium text-muted">{etiqueta}</p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums">{valor}</p>
+          <p className="mt-1 text-xs text-muted">{typeof valor === "number" && typeof antes === "number" ? delta(valor, antes) : ""}</p>
+        </article>
+      ))}
+    </div>
+  );
 }
 
-function moverMes(mes: string, delta: number): string {
-  const [anio, numero] = mes.split("-").map(Number);
-  return new Date(Date.UTC(anio, numero - 1 + delta, 1))
-    .toISOString()
-    .slice(0, 7);
+function Actividad({ panel }: { panel: Panel }) {
+  return (
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+      <div className="superficie overflow-x-auto">
+        <table className="w-full min-w-[36rem] text-left text-sm">
+          <caption className="sr-only">Actividad de registro</caption>
+          <thead>
+            <tr className="border-b border-line text-xs text-muted">
+              <th className="p-3">Quién</th><th className="p-3">Agenda</th><th className="p-3">Creadas</th><th className="p-3">Reagendadas</th><th className="p-3">Canceladas</th><th className="p-3">Asistencias</th>
+            </tr>
+          </thead>
+          <tbody>
+            {panel.actividad.filas.length === 0 ? <tr><td className="p-3 text-muted" colSpan={6}>Sin registros</td></tr> : null}
+            {panel.actividad.filas.map((fila) => (
+              <tr key={`${fila.nombre}-${fila.agenda}`} className="border-b border-line">
+                <td className="p-3">{fila.nombre}</td>
+                <td className="p-3">{fila.agenda === "PRIMERA_VEZ" ? "Primera vez" : "General"}</td>
+                <td className="p-3 tabular-nums">{fila.creadas} <span className="text-xs text-muted">{delta(fila.creadas, fila.anterior.creadas)}</span></td>
+                <td className="p-3 tabular-nums">{fila.reagendadas}</td>
+                <td className="p-3 tabular-nums">{fila.canceladas}</td>
+                <td className="p-3 tabular-nums">{fila.asistencias} <span className="text-xs text-muted">{delta(fila.asistencias, fila.anterior.asistencias)}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <ul className="superficie grid content-start gap-2 p-3 text-sm">
+        {panel.actividad.recientes.length === 0 ? <li className="text-muted">Sin registros</li> : null}
+        {panel.actividad.recientes.map((fila, i) => (
+          <li key={`${fila.at}-${i}`} className="border-b border-line pb-2">
+            <span className="font-semibold">{fila.quien}</span> {fila.accion.toLowerCase()} {fila.persona}
+            <span className="block text-xs text-muted">{textoFecha(fila.fecha).slice(0, 5)} {fila.hora} · {fila.agenda === "PRIMERA_VEZ" ? "Primera vez" : "General"}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
-function rangoCorto(desde: string, hasta: string): string {
-  const a = textoFecha(desde);
-  const b = textoFecha(hasta);
-  if (a.slice(6) === b.slice(6)) return `${a.slice(0, 5)} al ${b.slice(0, 5)}`;
-  return `${a} al ${b}`;
+function Relevantes({ panel }: { panel: Panel }) {
+  return (
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <Lista titulo="Inasistencias" filas={panel.relevantes.inasistencias.map((fila) => [fila.nombre, String(fila.n)])} />
+      <Lista titulo="Repetidas" filas={panel.relevantes.repetidas.map((fila) => [fila.nombre, String(fila.n)])} />
+      <Lista titulo="Trámites" filas={panel.relevantes.tramites.map((fila) => [fila.nombre, String(fila.citas)])} />
+      <Lista titulo="Ocupación" filas={panel.relevantes.ocupacion.map((fila) => [fila.hora, String(fila.citas)])} />
+    </div>
+  );
 }
 
+function Lista({ titulo, filas }: { titulo: string; filas: string[][] }) {
+  return (
+    <article className="superficie p-3">
+      <h2 className="text-sm font-semibold">{titulo}</h2>
+      <ul className="mt-2 grid gap-1 text-sm">
+        {filas.length === 0 ? <li className="text-muted">Sin datos</li> : null}
+        {filas.map(([nombre, n]) => <li key={nombre} className="flex justify-between gap-2"><span className="truncate">{nombre}</span><span className="tabular-nums">{n}</span></li>)}
+      </ul>
+    </article>
+  );
+}
+
+function Mini({ etiqueta, valor }: { etiqueta: string; valor: number }) {
+  return <article className="superficie px-3 py-3"><p className="text-xs text-muted">{etiqueta}</p><p className="text-2xl font-semibold tabular-nums">{valor}</p></article>;
+}
+
+function Calendario({ nombre, mes, dias, laborables, feriados, onMes }: { nombre: string; mes: string; dias: DiaMes[]; laborables: number[]; feriados: string[]; onMes: (delta: number) => void }) {
+  const mapa = new Map(dias.map((dia) => [dia.fecha, dia]));
+  const hoy = fechaHoy();
+  const grilla = grillaLaborable(mes, [1, 2, 3, 4, 5, 6, 7]);
+  return (
+    <article className="superficie p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="text-sm font-semibold">{nombre}</h2>
+        <div className="flex gap-1">
+          <button type="button" className="h-9 w-9 rounded-lg border border-line" aria-label="Mes anterior" onClick={() => onMes(-1)}>‹</button>
+          <button type="button" className="h-9 w-9 rounded-lg border border-line" aria-label="Mes siguiente" onClick={() => onMes(1)}>›</button>
+        </div>
+      </div>
+      <div className="grid gap-1 text-center text-[11px] font-medium uppercase text-muted" style={{ gridTemplateColumns: `repeat(${grilla.etiquetas.length}, minmax(0,1fr))` }}>
+        {grilla.etiquetas.map((dia) => <span key={dia}>{dia}</span>)}
+      </div>
+      <div className="mt-1 grid gap-1" style={{ gridTemplateColumns: `repeat(${grilla.etiquetas.length}, minmax(0,1fr))` }}>
+        {grilla.celdas.map((fecha, indice) => {
+          if (!fecha) return <span key={`v-${indice}`} />;
+          const dia = mapa.get(fecha);
+          const libres = dia?.libres ?? 0;
+          const pasado = fecha < hoy;
+          const laboral = laborables.includes(diaSemanaIso(fecha));
+          const feriado = feriados.includes(fecha) || Boolean(dia?.feriado);
+          const ocupacion = (dia?.atendidas ?? 0) > 0 ? dia?.atendidas ?? 0 : dia?.ocupados ?? 0;
+          const clase = feriado ? "cal-feriado" : !laboral ? "cal-cerrado" : pasado ? "cal-pasado" : libres > 0 ? "cal-libre" : "cal-vacio";
+          const detalle = feriado ? "Feriado" : !laboral ? "—" : pasado ? String(ocupacion) : `${libres} libres`;
+          return <div key={fecha} className={`cal-dia ${clase} ${fecha === hoy ? "is-today" : ""}`}><span className="font-medium">{Number(fecha.slice(8))}</span><span className="cal-meta">{detalle}</span></div>;
+        })}
+      </div>
+    </article>
+  );
+}
+
+function delta(actual: number, antes: number): string {
+  const n = actual - antes;
+  return `${n >= 0 ? "+" : ""}${n}`;
+}
 function sumar(iso: string, dias: number): string {
   const [anio, mes, dia] = iso.split("-").map(Number);
-  return new Date(Date.UTC(anio, mes - 1, dia + dias))
-    .toISOString()
-    .slice(0, 10);
+  return new Date(Date.UTC(anio, mes - 1, dia + dias)).toISOString().slice(0, 10);
+}
+function moverMes(mes: string, deltaMes: number): string {
+  const [anio, numero] = mes.split("-").map(Number);
+  return new Date(Date.UTC(anio, numero - 1 + deltaMes, 1)).toISOString().slice(0, 7);
 }
