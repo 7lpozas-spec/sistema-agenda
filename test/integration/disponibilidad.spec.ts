@@ -241,4 +241,88 @@ describe("cupos desde ahora en America/Santiago", () => {
     expect(cerrada.status).toBe(200);
     expect((cerrada.json as { citas: { id: string }[] }).citas.some((fila) => fila.id === idFutura)).toBe(true);
   });
+
+  it("cierra solo las horas vencidas, deshace y reubica con comprobante", async () => {
+    const recepcion = await entrar("RECEPCION");
+    const operador = await entrar("OPERADOR_AGENDA");
+    const admin = await entrar("ADMIN");
+    const local = partesEnZona(new Date(), ZONA);
+    await cupo("GENERAL", local.fecha, "00:00", 0, 1);
+    await cupo("GENERAL", local.fecha, "23:59", 0, 1);
+    const rutA = `25000221-${digitoVerificador("25000221")}`;
+    const rutB = `25000222-${digitoVerificador("25000222")}`;
+    async function sembrar(rut: string, nombres: string, hora: string) {
+      const ciudadano = crypto.randomUUID();
+      const cita = crypto.randomUUID();
+      const ahora = new Date().toISOString();
+      await env.DB.prepare("INSERT INTO ciudadanos (id, rut, nombres, apellidos, sin_correo, creado_at, actualizado_at) VALUES (?, ?, ?, 'Prueba', 1, ?, ?)").bind(ciudadano, rut, nombres, ahora, ahora).run();
+      await env.DB.prepare(
+        `INSERT INTO citas (id, agenda_id, ciudadano_id, tipo_tramite_id, clases, fecha, hora, estado, es_sobrecupo, canal, declara_domicilio_recoleta, docs_requeridos, docs_cargados, creado_por, creado_at)
+         VALUES (?, 'GENERAL', ?, 'CONTROL_RENOVACION', '["B"]', ?, ?, 'AGENDADA', 0, 'PRESENCIAL', 1, 1, 0, 'demo', ?)`,
+      ).bind(cita, ciudadano, local.fecha, hora, ahora).run();
+      return cita;
+    }
+    const pasada = await sembrar(rutA, "Pasada", "00:00");
+    const viva = local.hora < "23:59" ? await sembrar(rutB, "Tarde", "23:59") : pasada;
+    const cierre = await llamar("/jornada/cerrar", { method: "POST", sesion: recepcion, body: {} });
+    expect(cierre.status).toBe(200);
+    expect((cierre.json as { marcadas: number }).marcadas).toBeGreaterThan(0);
+    const estadoPasada = await env.DB.prepare("SELECT estado FROM citas WHERE id = ?").bind(pasada).first<{ estado: string }>();
+    expect(estadoPasada?.estado).toBe("NO_ASISTIO");
+    if (viva !== pasada) {
+      const estadoViva = await env.DB.prepare("SELECT estado FROM citas WHERE id = ?").bind(viva).first<{ estado: string }>();
+      expect(estadoViva?.estado).toBe("AGENDADA");
+    }
+    await env.DB.prepare("UPDATE cupos_bloque SET usados = capacidad WHERE fecha = ? AND hora IN ('00:00','23:59')").bind(local.fecha).run();
+    const deshacer = await llamar(`/citas/${pasada}/asistencia`, { method: "POST", sesion: recepcion, body: { estado: "AGENDADA" } });
+    expect(deshacer.status).toBe(200);
+    const destino = new Date(Date.UTC(Number(local.fecha.slice(0, 4)), Number(local.fecha.slice(5, 7)) - 1, Number(local.fecha.slice(8, 10)) + 4)).toISOString().slice(0, 10);
+    const origen = new Date(Date.UTC(Number(local.fecha.slice(0, 4)), Number(local.fecha.slice(5, 7)) - 1, Number(local.fecha.slice(8, 10)) + 3)).toISOString().slice(0, 10);
+    await cupo("GENERAL", destino, "11:15", 0, 1);
+    await cupo("GENERAL", origen, "10:00", 0, 1);
+    const creada = await llamar("/citas", {
+      method: "POST", sesion: operador,
+      body: { tipoTramiteId: "CONTROL_RENOVACION", fecha: origen, hora: "10:00", ciudadano: { rut: `25000223-${digitoVerificador("25000223")}`, nombres: "Mueve", apellidos: "Cita", sinCorreo: true } },
+    });
+    expect(creada.status).toBe(201);
+    const idMueve = (creada.json as { cita: { id: string } }).cita.id;
+    const bloqueo = await llamar("/config/bloquear-dia", { method: "POST", sesion: admin, body: { agendaId: "GENERAL", fecha: origen, motivo: "Corte de agua" } });
+    expect(bloqueo.status).toBe(200);
+    const propuestas = (bloqueo.json as { propuestas: { citaId: string; fecha: string; hora: string }[] }).propuestas;
+    expect(propuestas.some((fila) => fila.citaId === idMueve && fila.fecha === destino)).toBe(true);
+    const confirma = await llamar("/config/reubicar", { method: "POST", sesion: operador, body: { movimientos: propuestas.filter((fila) => fila.citaId === idMueve) } });
+    expect(confirma.status).toBe(200);
+    const movida = await env.DB.prepare("SELECT fecha, hora FROM citas WHERE id = ?").bind(idMueve).first<{ fecha: string; hora: string }>();
+    expect(movida).toMatchObject({ fecha: destino, hora: "11:15" });
+    const pdf = await llamar(`/citas/${idMueve}/comprobante.pdf`, { sesion: operador });
+    expect(pdf.status).toBe(200);
+    expect(pdf.headers.get("content-type")).toContain("pdf");
+    expect(new TextDecoder().decode(pdf.binario).startsWith("%PDF")).toBe(true);
+    const diaBloque = new Date(Date.UTC(Number(local.fecha.slice(0, 4)), Number(local.fecha.slice(5, 7)) - 1, Number(local.fecha.slice(8, 10)) + 6)).toISOString().slice(0, 10);
+    const diaLibre = new Date(Date.UTC(Number(local.fecha.slice(0, 4)), Number(local.fecha.slice(5, 7)) - 1, Number(local.fecha.slice(8, 10)) + 7)).toISOString().slice(0, 10);
+    await cupo("GENERAL", diaBloque, "09:00", 0, 1);
+    await cupo("GENERAL", diaLibre, "10:30", 0, 1);
+    const bloqueada = await llamar("/citas", {
+      method: "POST", sesion: operador,
+      body: { tipoTramiteId: "CONTROL_RENOVACION", fecha: diaBloque, hora: "09:00", ciudadano: { rut: `25000224-${digitoVerificador("25000224")}`, nombres: "Bloque", apellidos: "Hora", sinCorreo: true } },
+    });
+    expect(bloqueada.status).toBe(201);
+    const idBloque = (bloqueada.json as { cita: { id: string } }).cita.id;
+    const corte = await llamar("/bloques/bloquear", { method: "POST", sesion: admin, body: { agendaId: "GENERAL", fecha: diaBloque, hora: "09:00" } });
+    expect(corte.status).toBe(200);
+    const delBloque = (corte.json as { propuestas: { citaId: string; fecha: string; hora: string }[] }).propuestas;
+    expect(delBloque.some((fila) => fila.citaId === idBloque && fila.fecha === diaLibre && fila.hora === "10:30")).toBe(true);
+  });
+
+  it("administración lista y guarda feriados", async () => {
+    const admin = await entrar("ADMIN");
+    const lista = await llamar("/feriados", { sesion: admin });
+    expect(lista.status).toBe(200);
+    const alta = await llamar("/feriados", { method: "POST", sesion: admin, body: { fecha: "2026-12-25", nombre: "Navidad" } });
+    expect(alta.status).toBe(200);
+    const otra = await llamar("/feriados", { sesion: admin });
+    expect((otra.json as { feriados: { fecha: string; nombre: string }[] }).feriados.some((fila) => fila.fecha === "2026-12-25" && fila.nombre === "Navidad")).toBe(true);
+    const ajena = await entrar("OPERADOR_AGENDA");
+    expect((await llamar("/feriados", { sesion: ajena })).status).toBe(403);
+  });
 });

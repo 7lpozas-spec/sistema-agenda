@@ -20,6 +20,20 @@ await applyD1Migrations(env.DB, [
   { name: "0002_reference.sql", queries: dividirSql(enlace.MIGRATION_REFERENCE ?? "") },
   { name: "0004_documento_local.sql", queries: dividirSql(enlace.MIGRATION_FOTO ?? "") },
   { name: "0008_atencion.sql", queries: ["ALTER TABLE citas ADD COLUMN atencion_at TEXT"] },
+  { name: "0009_tiempos_ficticios.sql", queries: [
+    `UPDATE citas
+     SET asistencia_marcada_por = COALESCE(asistencia_marcada_por, creado_por),
+         asistencia_at = COALESCE(asistencia_at, fecha || 'T' || hora || ':00'),
+         atencion_at = datetime(COALESCE(asistencia_at, fecha || 'T' || hora || ':00'), '+' || (12 + (unicode(substr(id, 12, 1)) % 24)) || ' minutes')
+     WHERE estado IN ('ASISTIO', 'ATRASADO') AND fecha < '2026-11-25' AND atencion_at IS NULL`,
+  ] },
+  { name: "0010_espera_minutos.sql", queries: [
+    `UPDATE citas
+     SET atencion_at = datetime(asistencia_at, '+' || (12 + (unicode(substr(id, 12, 1)) % 24)) || ' minutes')
+     WHERE estado IN ('ASISTIO', 'ATRASADO')
+       AND asistencia_at IS NOT NULL AND atencion_at IS NOT NULL
+       AND abs((julianday(atencion_at) - julianday(asistencia_at)) * 1440) < 2`,
+  ] },
 ]);
 
 const TABLAS = [
