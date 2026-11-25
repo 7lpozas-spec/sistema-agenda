@@ -155,6 +155,8 @@ try {
   await cel.getByRole("button", { name: "Usar foto" }).click();
   await page.getByRole("img", { name: "Carnet, frente" }).waitFor();
   assert.equal(await page.getByRole("link", { name: "Comprobante" }).count(), 0);
+  const antes = await page.evaluate(async (id) => (await fetch(`/api/citas/${id}/comprobante.pdf`, { credentials: "same-origin" })).status, creada.cita.id);
+  assert.equal(antes, 409);
   const jpeg = Buffer.from((await cel.evaluate(() => {
     const lienzo = document.createElement("canvas");
     lienzo.width = 856;
@@ -173,6 +175,12 @@ try {
     await page.getByRole("img", { name: doc }).waitFor();
   }
   await page.getByRole("link", { name: "Emitir comprobante" }).waitFor();
+  const pdf = await page.evaluate(async (id) => {
+    const r = await fetch(`/api/citas/${id}/comprobante.pdf`, { credentials: "same-origin" });
+    return { status: r.status, tipo: r.headers.get("content-type") };
+  }, creada.cita.id);
+  assert.equal(pdf.status, 200);
+  assert.match(pdf.tipo ?? "", /pdf/);
   await page.screenshot({ path: `${salida}/16-foto-en-pc.png`, fullPage: false });
   await cel.close();
 
