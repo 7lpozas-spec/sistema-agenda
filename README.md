@@ -35,7 +35,7 @@ node scripts/crear-cuentas-demo.mjs
 npx wrangler d1 execute licencias_recoleta --local --file seed/semilla.sql
 ```
 
-Los correos de demostración son `admin@ejemplo.cl`, `operador@ejemplo.cl` e `instructor@ejemplo.cl`. Las contraseñas quedan solo en `.dev.vars`.
+Los correos de demostración son `admin@ejemplo.cl`, `operador@ejemplo.cl`, `instructor@ejemplo.cl` y `recepcion@ejemplo.cl`. Las contraseñas quedan solo en `.dev.vars`.
 
 El operador de agenda reserva en General y en Primera Vez, y marca la asistencia del mesón. El instructor solo ve la agenda de primera vez: asistencia y resultado del examen. No hay un operador de atención aparte, porque esa tarea es del mismo mesón.
 

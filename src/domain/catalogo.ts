@@ -1,4 +1,4 @@
-export const ROLES = ["ADMIN", "OPERADOR_AGENDA", "INSTRUCTOR"] as const;
+export const ROLES = ["ADMIN", "OPERADOR_AGENDA", "INSTRUCTOR", "RECEPCION"] as const;
 export type Rol = (typeof ROLES)[number];
 
 export const AGENDAS = ["GENERAL", "PRIMERA_VEZ"] as const;
@@ -54,6 +54,7 @@ export const NOMBRE_ROL: Record<Rol, string> = {
   ADMIN: "Administración",
   OPERADOR_AGENDA: "Operador de agenda",
   INSTRUCTOR: "Instructor",
+  RECEPCION: "Recepción",
 };
 
 export const FECHA_CORTE_PRIMERA_VEZ = "1984-02-07";

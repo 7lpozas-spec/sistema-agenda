@@ -13,19 +13,20 @@ import {
 import { enmascararRut, formatearRut, normalizarRut } from "./domain/rut";
 import { bloquesDeTipo } from "./servicios/reservas";
 import { evaluarTipo } from "./domain/reglas";
-import { puedeBloquear, puedeConfirmarAsistencia, puedeCrearCita, puedeExportar, puedeFotografiar, puedeMarcarResultado, puedeVerAgenda, puedeVerDashboard } from "./domain/permisos";
+import { agendasDeCitas, puedeBloquear, puedeConfirmarAsistencia, puedeCrearCita, puedeExportar, puedeFotografiar, puedeMarcarResultado, puedeVerAgenda, puedeVerCupos, puedeVerDashboard } from "./domain/permisos";
 import { bloquePosterior, fechaValida, partesEnZona, sumarDias } from "./domain/tiempo";
 import { correoValido, limpiarLinea, limpiarParrafo } from "./domain/texto";
 import { quitarExif } from "./domain/exif";
 import { detectarImagen } from "./domain/imagen";
 import { cabecerasDeSeguridad } from "./security/cabeceras";
-import { hashContrasena, iteracionesDeEntorno, sha256Hex, tokenUrl, verificarContrasena } from "./security/claves";
+import { contrasenaAceptable, hashContrasena, iteracionesDeEntorno, sha256Hex, tokenUrl, verificarContrasena } from "./security/claves";
 import { ErrorApp, esObjeto } from "./http/error";
 import { auditar } from "./servicios/auditoria";
 import { armarCorreo, despachar, textoDocumentos } from "./servicios/correo";
 import { cuposDesdeAhora, diasLaborables, feriadosDelMes, libresPorDia } from "./servicios/disponibilidad";
 import { regenerarCupos } from "./servicios/generar";
-import { armarEstadisticas, filtroDe, listadoCitas, type Estadisticas } from "./servicios/estadisticas";
+import { armarEstadisticas, filtroDe, listadoCitas, type Estadisticas, type FiltroEstadistica } from "./servicios/estadisticas";
+import { armarPanel } from "./servicios/panel";
 import { libroXlsx, reportePdf } from "./exportar/documentos";
 import { candado, sala } from "./locks";
 import { publicarEnDrive } from "./services/almacen";
@@ -206,11 +207,11 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     const ahora = new Date();
     const hoy = partesEnZona(ahora, "America/Santiago").fecha;
     const tarjetas = [];
-    for (const agenda of ["GENERAL", "PRIMERA_VEZ"] as const) {
+    for (const agenda of agendasDeCitas(usuario.rol)) {
       if (!puedeVerAgenda(usuario.rol, agenda)) continue;
       tarjetas.push(await tarjetaAgenda(c.env.DB, agenda, ahora));
     }
-    const metricas = await metricasDia(c.env.DB, hoy);
+    const metricas = await metricasDia(c.env.DB, hoy, agendasDeCitas(usuario.rol));
     const porTipo = await c.env.DB.prepare(
       `SELECT t.nombre, t.id, COUNT(c.id) AS citas,
               SUM(CASE WHEN c.estado = 'ASISTIO' OR c.estado = 'ATRASADO' THEN 1 ELSE 0 END) AS asistieron,
@@ -218,7 +219,16 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
        FROM tipos_tramite t LEFT JOIN citas c ON c.tipo_tramite_id = t.id AND c.fecha = ?
        GROUP BY t.id ORDER BY t.orden`,
     ).bind(hoy).all();
-    return c.json({ fecha: hoy, agendas: tarjetas, hoy: metricas, porTipo: porTipo.results, visibles: ["GENERAL", "PRIMERA_VEZ"] });
+    return c.json({ fecha: hoy, agendas: tarjetas, hoy: metricas, porTipo: porTipo.results, visibles: agendasDeCitas(usuario.rol) });
+  });
+
+  api.get("/panel", async (c) => {
+    const usuario = c.get("usuario");
+    if (!puedeVerDashboard(usuario.rol)) throw new ErrorApp(403, "SIN_PERMISO", "Su rol no tiene dashboard.");
+    const hoy = partesEnZona(new Date(), "America/Santiago").fecha;
+    const filtro = filtroVisible(usuario, { desde: c.req.query("desde"), hasta: c.req.query("hasta"), agenda: c.req.query("agenda") }, hoy);
+    const mes = c.req.query("mes") && /^\d{4}-\d{2}$/.test(c.req.query("mes") ?? "") ? c.req.query("mes")! : hoy.slice(0, 7);
+    return c.json(await armarPanel(c.env.DB, usuario.rol, filtro.desde, filtro.hasta, mes, new Date(), hoy));
   });
 
   api.get("/agendas/:id/proxima-fecha", async (c) => {
@@ -275,7 +285,9 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
   });
 
   api.get("/ciudadanos", async (c) => {
-    if (c.get("usuario").rol === "INSTRUCTOR") throw new ErrorApp(403, "SIN_PERMISO", "Use la lista del día para buscar.");
+    if (c.get("usuario").rol === "INSTRUCTOR" || c.get("usuario").rol === "RECEPCION") {
+      throw new ErrorApp(403, "SIN_PERMISO", "Use la lista del día para buscar.");
+    }
     const rut = normalizarRut(c.req.query("rut") ?? "");
     if (!rut) throw new ErrorApp(400, "RUT_INVALIDO", "El RUT no es válido. Revise el dígito verificador.");
     const ciudadano = await c.env.DB.prepare("SELECT * FROM ciudadanos WHERE rut = ?").bind(rut).first();
@@ -372,8 +384,12 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
   api.get("/citas/:id", async (c) => {
     const cita = await citaCompleta(c.env.DB, c.req.param("id"));
     if (!cita) throw new ErrorApp(404, "NO_ENCONTRADO", "No existe esa cita.");
-    if (!puedeVerAgenda(c.get("usuario").rol, cita.agenda_id as AgendaId)) {
+    if (!agendasDeCitas(c.get("usuario").rol).includes(cita.agenda_id as AgendaId)) {
       throw new ErrorApp(403, "SIN_PERMISO", "Su rol no puede ver esa agenda.");
+    }
+    const hoyCita = partesEnZona(new Date(), "America/Santiago").fecha;
+    if (c.get("usuario").rol === "RECEPCION" && cita.fecha !== hoyCita) {
+      throw new ErrorApp(403, "SIN_PERMISO", "Recepción solo ve las citas de hoy.");
     }
     const historial = await c.env.DB.prepare("SELECT evento, antes, despues, at FROM cita_historial WHERE cita_id = ? ORDER BY at").bind(cita.id).all();
     const otras = await c.env.DB.prepare(
@@ -431,6 +447,9 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     const cita = await citaCompleta(c.env.DB, c.req.param("id"));
     if (!cita) throw new ErrorApp(404, "NO_ENCONTRADO", "No existe esa cita.");
     if (!puedeConfirmarAsistencia(usuario.rol, cita.agenda_id as AgendaId)) throw new ErrorApp(403, "SIN_PERMISO", "No puede marcar la asistencia de esa agenda.");
+    if (usuario.rol === "RECEPCION" && cita.fecha !== partesEnZona(new Date(), "America/Santiago").fecha) {
+      throw new ErrorApp(403, "SIN_PERMISO", "Recepción solo marca la asistencia de hoy.");
+    }
     const cuerpo = await leerJson(c.req.raw);
     const estado = texto(cuerpo.estado, "El estado", 3, 20) as EstadoCita;
     const minutos = Number(await parametro(c.env.DB, "minutos_deshacer_asistencia", "15"));
@@ -451,11 +470,17 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
 
   api.get("/lista-dia", async (c) => {
     const usuario = c.get("usuario");
-    if (usuario.rol !== "ADMIN" && usuario.rol !== "OPERADOR_AGENDA" && usuario.rol !== "INSTRUCTOR") {
+    if (usuario.rol !== "ADMIN" && usuario.rol !== "OPERADOR_AGENDA" && usuario.rol !== "INSTRUCTOR" && usuario.rol !== "RECEPCION") {
       throw new ErrorApp(403, "SIN_PERMISO", "No puede ver la lista del día.");
     }
-    const fecha = c.req.query("fecha") ?? partesEnZona(new Date(), "America/Santiago").fecha;
-    const agendaFiltro = usuario.rol === "INSTRUCTOR" ? "PRIMERA_VEZ" : "";
+    const hoyLista = partesEnZona(new Date(), "America/Santiago").fecha;
+    const pedida = c.req.query("fecha") ?? hoyLista;
+    if (usuario.rol === "RECEPCION" && pedida !== hoyLista) throw new ErrorApp(403, "SIN_PERMISO", "Recepción solo ve las citas de hoy.");
+    const fecha = pedida;
+    const agendaFiltro = usuario.rol === "INSTRUCTOR" ? "PRIMERA_VEZ" : c.req.query("agenda") && esAgenda(c.req.query("agenda") ?? "") ? c.req.query("agenda")! : "";
+    if (agendaFiltro && !agendasDeCitas(usuario.rol).includes(agendaFiltro as AgendaId)) {
+      throw new ErrorApp(403, "SIN_PERMISO", "Su rol no puede ver esa agenda.");
+    }
     const q = limpiarLinea(c.req.query("q") ?? "");
     const rut = normalizarRut(q);
     const filas = await c.env.DB.prepare(
@@ -507,9 +532,14 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
 
   api.get("/export/citas.csv", async (c) => {
     if (!puedeExportar(c.get("usuario").rol)) throw new ErrorApp(403, "SIN_PERMISO", "Su rol no exporta.");
+    const usuario = c.get("usuario");
+    const pedida = c.req.query("agenda");
+    if (pedida && (!esAgenda(pedida) || !agendasDeCitas(usuario.rol).includes(pedida))) {
+      throw new ErrorApp(403, "SIN_PERMISO", "Su rol no puede ver esa agenda.");
+    }
+    const agenda = usuario.rol === "INSTRUCTOR" ? "PRIMERA_VEZ" : pedida && esAgenda(pedida) ? pedida : null;
     const desde = c.req.query("desde") ?? "0000-01-01";
     const hasta = c.req.query("hasta") ?? "9999-12-31";
-    const agenda = c.req.query("agenda");
     const filas = await c.env.DB.prepare(
       `SELECT c.fecha, c.hora, c.agenda_id, c.estado, c.es_sobrecupo, t.nombre AS tramite, ci.rut, ci.nombres, ci.apellidos
        FROM citas c JOIN ciudadanos ci ON ci.id = c.ciudadano_id JOIN tipos_tramite t ON t.id = c.tipo_tramite_id
@@ -618,6 +648,48 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     const filas = await c.env.DB.prepare("SELECT id, email, nombre, rol, activo FROM usuarios ORDER BY nombre").all();
     return c.json({ usuarios: (filas.results as { activo: number }[]).map((fila) => ({ ...fila, activo: fila.activo === 1 })) });
   });
+  api.post("/usuarios", async (c) => {
+    if (c.get("usuario").rol !== "ADMIN") throw new ErrorApp(403, "SIN_PERMISO", "Solo administración crea cuentas.");
+    const cuerpo = await leerJson(c.req.raw);
+    const nombre = texto(cuerpo.nombre, "El nombre", 2, 80);
+    const email = texto(cuerpo.email, "El correo", 5, 120).toLowerCase();
+    const rol = texto(cuerpo.rol, "El rol", 3, 20);
+    const contrasena = typeof cuerpo.contrasena === "string" ? cuerpo.contrasena : "";
+    if (!esRol(rol)) throw new ErrorApp(400, "DATO_INVALIDO", "El rol no existe.");
+    if (!contrasenaAceptable(contrasena)) throw new ErrorApp(400, "DATO_INVALIDO", "La clave necesita 12 caracteres, con mayúscula, minúscula y número.");
+    const hash = await hashContrasena(contrasena, iteracionesDeEntorno(c.env.PBKDF2_ITERATIONS));
+    const id = crypto.randomUUID();
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO usuarios (id, email, nombre, rol, password_hash, puede_ver_otra_agenda, puede_usar_sobrecupo, puede_capturar_fotos, activo, creado_at)
+         VALUES (?, ?, ?, ?, ?, 1, 0, 0, 1, ?)`,
+      ).bind(id, email, nombre, rol, hash, new Date().toISOString()).run();
+    } catch (error) {
+      const mensaje = error instanceof Error ? error.message : "";
+      if (mensaje.includes("UNIQUE")) throw new ErrorApp(409, "DATO_INVALIDO", "Ese correo ya tiene cuenta.");
+      throw error;
+    }
+    await auditar(c.env.DB, { usuarioId: c.get("usuario").id, accion: "crear_usuario", entidad: "usuario", entidadId: id, despues: { email, rol }, ip: ipDe(c.req.raw) });
+    return c.json({ id, email, rol }, 201);
+  });
+  api.patch("/usuarios/:id", async (c) => {
+    if (c.get("usuario").rol !== "ADMIN") throw new ErrorApp(403, "SIN_PERMISO", "Solo administración edita cuentas.");
+    const id = c.req.param("id");
+    const existe = await c.env.DB.prepare("SELECT id FROM usuarios WHERE id = ?").bind(id).first();
+    if (!existe) throw new ErrorApp(404, "NO_ENCONTRADO", "No existe esa cuenta.");
+    const cuerpo = await leerJson(c.req.raw);
+    if (typeof cuerpo.activo === "boolean") {
+      await c.env.DB.prepare("UPDATE usuarios SET activo = ? WHERE id = ?").bind(cuerpo.activo ? 1 : 0, id).run();
+      if (!cuerpo.activo) await c.env.DB.prepare("DELETE FROM sesiones WHERE usuario_id = ?").bind(id).run();
+    }
+    if (typeof cuerpo.contrasena === "string" && cuerpo.contrasena) {
+      if (!contrasenaAceptable(cuerpo.contrasena)) throw new ErrorApp(400, "DATO_INVALIDO", "La clave necesita 12 caracteres, con mayúscula, minúscula y número.");
+      const hash = await hashContrasena(cuerpo.contrasena, iteracionesDeEntorno(c.env.PBKDF2_ITERATIONS));
+      await c.env.DB.prepare("UPDATE usuarios SET password_hash = ? WHERE id = ?").bind(hash, id).run();
+    }
+    await auditar(c.env.DB, { usuarioId: c.get("usuario").id, accion: "editar_usuario", entidad: "usuario", entidadId: id, despues: { activo: cuerpo.activo ?? null, clave: typeof cuerpo.contrasena === "string" }, ip: ipDe(c.req.raw) });
+    return c.json({ ok: true });
+  });
   api.get("/auditoria", async (c) => {
     if (c.get("usuario").rol !== "ADMIN") throw new ErrorApp(403, "SIN_PERMISO", "Solo administración ve la auditoría.");
     const filas = await c.env.DB.prepare(
@@ -628,15 +700,16 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
   });
 
   api.get("/estadisticas", async (c) => {
-    if (!puedeVerDashboard(c.get("usuario").rol)) throw new ErrorApp(403, "SIN_PERMISO", "Su rol no tiene estadísticas.");
+    const usuario = c.get("usuario");
+    if (!puedeVerDashboard(usuario.rol) || usuario.rol === "RECEPCION") throw new ErrorApp(403, "SIN_PERMISO", "Su rol no tiene esas estadísticas.");
     const hoy = partesEnZona(new Date(), "America/Santiago").fecha;
-    const filtro = filtroDe({ desde: c.req.query("desde"), hasta: c.req.query("hasta"), agenda: c.req.query("agenda"), tipo: c.req.query("tipo") }, hoy);
+    const filtro = filtroVisible(usuario, { desde: c.req.query("desde"), hasta: c.req.query("hasta"), agenda: c.req.query("agenda"), tipo: c.req.query("tipo") }, hoy);
     return c.json(await armarEstadisticas(c.env.DB, filtro));
   });
 
   api.get("/export/estadisticas.csv", async (c) => {
     if (!puedeExportar(c.get("usuario").rol)) throw new ErrorApp(403, "SIN_PERMISO", "Su rol no exporta.");
-    const filtro = filtroDe(consulta(c), partesEnZona(new Date(), "America/Santiago").fecha);
+    const filtro = filtroVisible(c.get("usuario"), consulta(c), partesEnZona(new Date(), "America/Santiago").fecha);
     const datos = await armarEstadisticas(c.env.DB, filtro);
     const listado = await listadoCitas(c.env.DB, filtro);
     const lineas = [
@@ -664,7 +737,7 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
 
   api.get("/export/estadisticas.xlsx", async (c) => {
     if (!puedeExportar(c.get("usuario").rol)) throw new ErrorApp(403, "SIN_PERMISO", "Su rol no exporta.");
-    const filtro = filtroDe(consulta(c), partesEnZona(new Date(), "America/Santiago").fecha);
+    const filtro = filtroVisible(c.get("usuario"), consulta(c), partesEnZona(new Date(), "America/Santiago").fecha);
     const datos = await armarEstadisticas(c.env.DB, filtro);
     const listado = await listadoCitas(c.env.DB, filtro);
     const archivo = libroXlsx([
@@ -685,7 +758,7 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
 
   api.get("/export/citas.xlsx", async (c) => {
     if (!puedeExportar(c.get("usuario").rol)) throw new ErrorApp(403, "SIN_PERMISO", "Su rol no exporta.");
-    const filtro = filtroDe(consulta(c), partesEnZona(new Date(), "America/Santiago").fecha);
+    const filtro = filtroVisible(c.get("usuario"), consulta(c), partesEnZona(new Date(), "America/Santiago").fecha);
     const listado = await listadoCitas(c.env.DB, filtro);
     const archivo = libroXlsx([{
       nombre: "Citas",
@@ -701,7 +774,7 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     if (!puedeExportar(c.get("usuario").rol)) throw new ErrorApp(403, "SIN_PERMISO", "Su rol no exporta.");
     const hoy = partesEnZona(new Date(), "America/Santiago").fecha;
     const fecha = c.req.query("fecha") && fechaValida(c.req.query("fecha") ?? "") ? c.req.query("fecha")! : hoy;
-    const filtro = filtroDe({ desde: fecha, hasta: fecha, agenda: c.req.query("agenda"), tipo: c.req.query("tipo") }, hoy);
+    const filtro = filtroVisible(c.get("usuario"), { desde: fecha, hasta: fecha, agenda: c.req.query("agenda"), tipo: c.req.query("tipo") }, hoy);
     const datos = await armarEstadisticas(c.env.DB, filtro);
     const listado = await listadoCitas(c.env.DB, filtro);
     const lineas = [
@@ -777,14 +850,16 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
   });
 
   api.get("/huecos", async (c) => {
-    if (!puedeCrearCita(c.get("usuario").rol, "GENERAL") && !puedeVerDashboard(c.get("usuario").rol)) {
-      throw new ErrorApp(403, "SIN_PERMISO", "No puede consultar la disponibilidad.");
-    }
+    const usuario = c.get("usuario");
+    if (!puedeVerCupos(usuario.rol)) throw new ErrorApp(403, "SIN_PERMISO", "No puede consultar la disponibilidad.");
     const ahora = new Date();
     const desde = c.req.query("desde") && fechaValida(c.req.query("desde") ?? "") ? c.req.query("desde")! : "";
     const dia = c.req.query("dia") && fechaValida(c.req.query("dia") ?? "") ? c.req.query("dia")! : "";
     const manana = c.req.query("manana") === "1";
     const pedida = c.req.query("agenda");
+    if (pedida && (!esAgenda(pedida) || !puedeVerAgenda(usuario.rol, pedida))) {
+      throw new ErrorApp(403, "SIN_PERMISO", "Su rol no puede ver esa agenda.");
+    }
     const agendas = pedida && esAgenda(pedida) ? [pedida] : (["GENERAL", "PRIMERA_VEZ"] as const);
     const salida = [];
     for (const agenda of agendas) {
@@ -798,7 +873,12 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
   });
 
   api.get("/disponibilidad/mes", async (c) => {
-    if (!puedeVerDashboard(c.get("usuario").rol)) throw new ErrorApp(403, "SIN_PERMISO", "Su rol no tiene dashboard.");
+    const usuario = c.get("usuario");
+    if (!puedeVerCupos(usuario.rol)) throw new ErrorApp(403, "SIN_PERMISO", "Su rol no tiene ese calendario.");
+    const pedida = c.req.query("agenda");
+    if (pedida && (!esAgenda(pedida) || !puedeVerAgenda(usuario.rol, pedida))) {
+      throw new ErrorApp(403, "SIN_PERMISO", "Su rol no puede ver esa agenda.");
+    }
     const hoy = partesEnZona(new Date(), "America/Santiago").fecha;
     const mes = c.req.query("mes") && /^\d{4}-\d{2}$/.test(c.req.query("mes") ?? "") ? c.req.query("mes")! : hoy.slice(0, 7);
     const [dias, laborables, feriados] = await Promise.all([
@@ -806,7 +886,43 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
       diasLaborables(c.env.DB),
       feriadosDelMes(c.env.DB, mes),
     ]);
-    return c.json({ mes, dias, laborables, feriados });
+    const permitidas = usuario.rol === "INSTRUCTOR" ? ["PRIMERA_VEZ"] : pedida ? [pedida] : ["GENERAL", "PRIMERA_VEZ"];
+    return c.json({ mes, dias: dias.filter((fila) => permitidas.includes(fila.agenda)), laborables, feriados });
+  });
+
+  api.post("/citas/:id/atencion", async (c) => {
+    const usuario = c.get("usuario");
+    const cita = await citaCompleta(c.env.DB, c.req.param("id"));
+    if (!cita) throw new ErrorApp(404, "NO_ENCONTRADO", "No existe esa cita.");
+    if (!puedeConfirmarAsistencia(usuario.rol, cita.agenda_id as AgendaId)) throw new ErrorApp(403, "SIN_PERMISO", "No puede marcar la atención.");
+    const hoy = partesEnZona(new Date(), "America/Santiago").fecha;
+    if (usuario.rol === "RECEPCION" && cita.fecha !== hoy) throw new ErrorApp(403, "SIN_PERMISO", "Recepción solo atiende las citas de hoy.");
+    if (cita.estado !== "ASISTIO" && cita.estado !== "ATRASADO") throw new ErrorApp(409, "ESTADO_INVALIDO", "Primero marque la llegada.");
+    const marca = new Date().toISOString();
+    await c.env.DB.prepare("UPDATE citas SET atencion_at = ?, actualizado_por = ?, actualizado_at = ? WHERE id = ?").bind(marca, usuario.id, marca, cita.id).run();
+    await auditar(c.env.DB, { usuarioId: usuario.id, accion: "atencion", entidad: "cita", entidadId: cita.id, despues: { atencion_at: marca }, ip: ipDe(c.req.raw) });
+    await avisarOficina(c.env, { tipo: "cita", citaId: cita.id });
+    return c.json({ ok: true, atencionAt: marca });
+  });
+
+  api.post("/config/bloquear-dia", async (c) => {
+    if (!puedeBloquear(c.get("usuario").rol)) throw new ErrorApp(403, "SIN_PERMISO", "No puede bloquear un día.");
+    const cuerpo = await leerJson(c.req.raw);
+    const agenda = texto(cuerpo.agendaId, "La agenda", 3, 20);
+    const fecha = texto(cuerpo.fecha, "La fecha", 10, 10);
+    const motivo = texto(cuerpo.motivo, "El motivo", 3, 200);
+    if (!esAgenda(agenda) || !fechaValida(fecha)) throw new ErrorApp(400, "DATO_INVALIDO", "La agenda o la fecha no es válida.");
+    await c.env.DB.prepare(
+      `INSERT INTO excepciones_dia (id, agenda_id, fecha, tipo, motivo, creado_at) VALUES (?, ?, ?, 'BLOQUEO', ?, ?)`,
+    ).bind(crypto.randomUUID(), agenda, fecha, motivo, new Date().toISOString()).run();
+    await c.env.DB.prepare("UPDATE cupos_dia SET capacidad = usados WHERE agenda_id = ? AND fecha = ?").bind(agenda, fecha).run();
+    await c.env.DB.prepare("UPDATE cupos_bloque SET capacidad = usados WHERE agenda_id = ? AND fecha = ? AND usados < capacidad").bind(agenda, fecha).run();
+    const afectadas = await c.env.DB.prepare(
+      `SELECT c.id, c.hora, ci.nombres, ci.apellidos FROM citas c JOIN ciudadanos ci ON ci.id = c.ciudadano_id
+       WHERE c.agenda_id = ? AND c.fecha = ? AND c.estado = 'AGENDADA' ORDER BY c.hora`,
+    ).bind(agenda, fecha).all<{ id: string; hora: string; nombres: string; apellidos: string }>();
+    await auditar(c.env.DB, { usuarioId: c.get("usuario").id, accion: "bloquear_dia", entidad: "cupo", despues: { agenda, fecha, motivo, citas: afectadas.results.length }, ip: ipDe(c.req.raw) });
+    return c.json({ citas: afectadas.results.map((fila) => ({ id: fila.id, hora: fila.hora, nombre: `${fila.apellidos}, ${fila.nombres}` })) });
   });
 
   api.post("/bloques/bloquear", async (c) => {
@@ -1078,6 +1194,15 @@ function publico(usuario: Usuario) {
     puedeVerOtraAgenda: usuario.puede_ver_otra_agenda === 1, puedeUsarSobrecupo: usuario.puede_usar_sobrecupo === 1,
   };
 }
+function filtroVisible(usuario: Usuario, query: { desde?: string; hasta?: string; agenda?: string; tipo?: string }, hoy: string): FiltroEstadistica {
+  const filtro = filtroDe(query, hoy);
+  if (filtro.agenda && !agendasDeCitas(usuario.rol).includes(filtro.agenda as AgendaId)) {
+    throw new ErrorApp(403, "SIN_PERMISO", "Su rol no puede ver esa agenda.");
+  }
+  if (usuario.rol === "INSTRUCTOR") filtro.agenda = "PRIMERA_VEZ";
+  return filtro;
+}
+
 function exigirAgendaVisible(usuario: Usuario, agenda: string): AgendaId {
   if (!esAgenda(agenda) || !puedeVerAgenda(usuario.rol, agenda)) {
     throw new ErrorApp(403, "SIN_PERMISO", "Su rol no puede ver esa agenda.");
@@ -1111,8 +1236,10 @@ async function tarjetaAgenda(db: D1Database, agenda: AgendaId, ahora: Date) {
     sobrecupo: sobrecupo ? { activo: true, usados: sobrecupo.usados, tope: sobrecupo.tope } : { activo: false },
   };
 }
-async function metricasDia(db: D1Database, hoy: string) {
-  const filas = await db.prepare("SELECT estado, COUNT(*) AS n FROM citas WHERE fecha = ? GROUP BY estado").bind(hoy).all<{ estado: string; n: number }>();
+async function metricasDia(db: D1Database, hoy: string, agendas: AgendaId[] = ["GENERAL", "PRIMERA_VEZ"]) {
+  const filas = await db.prepare(
+    `SELECT estado, COUNT(*) AS n FROM citas WHERE fecha = ? AND agenda_id IN (${agendas.map(() => "?").join(",")}) GROUP BY estado`,
+  ).bind(hoy, ...agendas).all<{ estado: string; n: number }>();
   const mapa = Object.fromEntries(filas.results.map((fila) => [fila.estado, fila.n]));
   const total = filas.results.reduce((suma, fila) => suma + fila.n, 0);
   return {

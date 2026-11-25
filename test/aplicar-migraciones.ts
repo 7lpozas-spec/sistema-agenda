@@ -19,6 +19,7 @@ await applyD1Migrations(env.DB, [
   { name: "0001_schema.sql", queries: dividirSql(enlace.MIGRATION_SCHEMA ?? "") },
   { name: "0002_reference.sql", queries: dividirSql(enlace.MIGRATION_REFERENCE ?? "") },
   { name: "0004_documento_local.sql", queries: dividirSql(enlace.MIGRATION_FOTO ?? "") },
+  { name: "0008_atencion.sql", queries: ["ALTER TABLE citas ADD COLUMN atencion_at TEXT"] },
 ]);
 
 const TABLAS = [

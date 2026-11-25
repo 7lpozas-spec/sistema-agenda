@@ -5,6 +5,7 @@ const cuentas = [
   ["135cc262-3f65-438d-9ca5-7168a66ee208", "admin@ejemplo.cl", "Ana Prueba Admin", "ADMIN", "LICENCIAS_CLAVE_ADMIN"],
   ["dc7f1da9-35cc-4353-90d1-6e0f43cbdf6e", "operador@ejemplo.cl", "Diego Prueba Operador", "OPERADOR_AGENDA", "LICENCIAS_CLAVE_OPERADOR"],
   ["975a9d63-24c2-4c3f-89ca-38f83df09709", "instructor@ejemplo.cl", "Carla Ficticia Instructora", "INSTRUCTOR", "LICENCIAS_CLAVE_INSTRUCTOR"],
+  ["4b6e2a10-7c31-4e5a-9f08-2d6c1b0e8a44", "recepcion@ejemplo.cl", "Marta Prueba Recepción", "RECEPCION", "LICENCIAS_CLAVE_RECEPCION"],
 ];
 
 function hash(clave) {
@@ -30,7 +31,7 @@ const valores = cuentas.map(([id, email, nombre, rol, variable]) => {
 });
 
 const sql = [
-  "DELETE FROM usuarios WHERE email IN ('admin@ejemplo.cl', 'operador@ejemplo.cl', 'instructor@ejemplo.cl');",
+  "DELETE FROM usuarios WHERE email IN ('admin@ejemplo.cl', 'operador@ejemplo.cl', 'instructor@ejemplo.cl', 'recepcion@ejemplo.cl');",
   "INSERT INTO usuarios (id, email, nombre, rol, password_hash, puede_ver_otra_agenda, puede_usar_sobrecupo, puede_capturar_fotos, activo, creado_at) VALUES",
   `${valores.join(",\n")};`,
 ].join("\n");

@@ -185,4 +185,60 @@ describe("cupos desde ahora en America/Santiago", () => {
     expect(movida.status).toBe(409);
     expect((movida.json as { codigo?: string }).codigo).toBe("HORA_PASADA");
   });
+
+  it("separa el dashboard y la recepción por rol", async () => {
+    const instructor = await entrar("INSTRUCTOR");
+    const recepcion = await entrar("RECEPCION");
+    const operador = await entrar("OPERADOR_AGENDA");
+    const admin = await entrar("ADMIN");
+    const local = partesEnZona(new Date(), ZONA);
+    await cupo("GENERAL", local.fecha, "09:00", 0, 2);
+    const cuerpo = 25000111;
+    const rut = `${cuerpo}-${digitoVerificador(String(cuerpo))}`;
+    const ciudadano = crypto.randomUUID();
+    await env.DB.prepare(
+      "INSERT INTO ciudadanos (id, rut, nombres, apellidos, sin_correo, creado_at, actualizado_at) VALUES (?, ?, 'Nora', 'Meson', 1, ?, ?)",
+    ).bind(ciudadano, rut, new Date().toISOString(), new Date().toISOString()).run();
+    const id = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO citas (id, agenda_id, ciudadano_id, tipo_tramite_id, clases, fecha, hora, estado, es_sobrecupo, canal, declara_domicilio_recoleta, docs_requeridos, docs_cargados, creado_por, creado_at)
+       VALUES (?, 'GENERAL', ?, 'CONTROL_RENOVACION', '["B"]', ?, '09:00', 'AGENDADA', 0, 'PRESENCIAL', 1, 1, 0, ?, ?)`,
+    ).bind(id, ciudadano, local.fecha, operador ? "demo" : "demo", new Date().toISOString()).run();
+    expect((await llamar("/huecos?agenda=GENERAL", { sesion: instructor })).status).toBe(403);
+    expect((await llamar("/export/estadisticas.csv?agenda=GENERAL", { sesion: instructor })).status).toBe(403);
+    const panelInstructor = await llamar("/panel", { sesion: instructor });
+    expect(panelInstructor.status).toBe(200);
+    expect((panelInstructor.json as { huecos: { agenda: string }[] }).huecos.every((fila) => fila.agenda === "PRIMERA_VEZ")).toBe(true);
+    expect((await llamar("/citas", { method: "POST", sesion: recepcion, body: { tipoTramiteId: "CONTROL_RENOVACION", fecha: local.fecha, hora: "09:00" } })).status).toBe(403);
+    expect((await llamar("/huecos", { sesion: recepcion })).status).toBe(403);
+    expect((await llamar(`/agendas/GENERAL/dia/${local.fecha}`, { sesion: recepcion })).status).toBe(403);
+    const lista = await llamar("/lista-dia", { sesion: recepcion });
+    expect(lista.status).toBe(200);
+    const marcada = await llamar(`/citas/${id}/asistencia`, { method: "POST", sesion: recepcion, body: { estado: "ASISTIO" } });
+    expect(marcada.status).toBe(200);
+    const manana = new Date(Date.UTC(Number(local.fecha.slice(0, 4)), Number(local.fecha.slice(5, 7)) - 1, Number(local.fecha.slice(8, 10)) + 2)).toISOString().slice(0, 10);
+    await cupo("GENERAL", manana, "10:00", 0, 1);
+    const futura = await llamar("/citas", {
+      method: "POST", sesion: operador,
+      body: { tipoTramiteId: "CONTROL_RENOVACION", fecha: manana, hora: "10:00", ciudadano: { rut: `${25000112}-${digitoVerificador("25000112")}`, nombres: "Nora", apellidos: "Manana", sinCorreo: true } },
+    });
+    expect(futura.status).toBe(201);
+    const idFutura = (futura.json as { cita: { id: string } }).cita.id;
+    expect((await llamar(`/citas/${idFutura}`, { sesion: recepcion })).status).toBe(403);
+    expect((await llamar(`/citas/${idFutura}/asistencia`, { method: "POST", sesion: recepcion, body: { estado: "ASISTIO" } })).status).toBe(403);
+    const panelRecepcion = await llamar(`/panel?desde=${local.fecha}&hasta=${local.fecha}`, { sesion: recepcion });
+    expect((panelRecepcion.json as { vista: string }).vista).toBe("recepcion");
+    expect((panelRecepcion.json as { huecos: unknown[] }).huecos).toEqual([]);
+    const creadaCuenta = await llamar("/usuarios", {
+      method: "POST", sesion: admin,
+      body: { nombre: "Mesa Norte", email: "mesa.norte@ejemplo.cl", rol: "RECEPCION", contrasena: "Clave-Recepcion-2026" },
+    });
+    expect(creadaCuenta.status).toBe(201);
+    const cerrada = await llamar("/config/bloquear-dia", {
+      method: "POST", sesion: admin,
+      body: { agendaId: "GENERAL", fecha: manana, motivo: "Cierre de prueba" },
+    });
+    expect(cerrada.status).toBe(200);
+    expect((cerrada.json as { citas: { id: string }[] }).citas.some((fila) => fila.id === idFutura)).toBe(true);
+  });
 });

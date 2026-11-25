@@ -85,7 +85,11 @@ describe("criterios de aceptación", () => {
     const operador = await entrar("INSTRUCTOR");
     const fecha = await fechaLibre();
     await abrir("GENERAL", fecha, "11:00", 3, 10);
-    expect((await llamar("/dashboard", { sesion: operador })).status).toBe(403);
+    const tableroInstructor = await llamar("/dashboard", { sesion: operador });
+    expect(tableroInstructor.status).toBe(200);
+    expect((tableroInstructor.json as { agendas: { agenda: string }[] }).agendas.every((fila) => fila.agenda !== "GENERAL")).toBe(true);
+    expect((await llamar("/estadisticas?agenda=GENERAL", { sesion: operador })).status).toBe(403);
+    expect((await llamar("/huecos?agenda=GENERAL", { sesion: operador })).status).toBe(403);
     expect((await llamar("/citas", { method: "POST", sesion: operador, body: { tipoTramiteId: "CONTROL_RENOVACION" } })).status).toBe(403);
     expect((await llamar("/agendas/GENERAL/proxima-fecha", { sesion: operador })).status).toBe(403);
     const lista = await llamar("/lista-dia", { sesion: operador });
