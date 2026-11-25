@@ -66,7 +66,7 @@ export function Admin() {
   if (usuario && usuario.rol !== "ADMIN") return <Aviso tono="info">Solo administración entra a esta sección.</Aviso>;
   return (
     <section className="grid gap-4">
-      <h1 className="text-3xl font-semibold">Administración</h1>
+      <h1 className="text-xl font-semibold tracking-tight">Administración</h1>
       <div className="flex flex-wrap gap-1 rounded-full bg-white p-1 shadow-sm" role="tablist" aria-label="Herramientas">
         {[
           ["parametros", "Parámetros"],
@@ -74,6 +74,7 @@ export function Admin() {
           ["importar", "Importar"],
           ["usuarios", "Cuentas"],
           ["feriados", "Feriados"],
+          ["servicios", "Servicios del mesón"],
           ["cupos", "Cupos"],
           ["auditoria", "Auditoría"],
         ].map(([id, texto]) => (
@@ -88,6 +89,7 @@ export function Admin() {
       {seccion === "importar" ? <Importar /> : null}
       {seccion === "usuarios" ? <Cuentas /> : null}
       {seccion === "feriados" ? <Feriados /> : null}
+      {seccion === "servicios" ? <ServiciosMeson /> : null}
       {seccion === "cupos" ? <Cupos /> : null}
       {seccion === "auditoria" ? <Auditoria /> : null}
       </div>
@@ -539,6 +541,112 @@ function Auditoria() {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+interface ServicioMeson { id: string; nombre: string; activo: number; orden: number }
+
+function ServiciosMeson() {
+  const [filas, setFilas] = useState<ServicioMeson[] | null>(null);
+  const [nombre, setNombre] = useState("");
+  const [editando, setEditando] = useState<Record<string, string>>({});
+  const [error, setError] = useState("");
+  function cargar() {
+    void api<{ servicios: ServicioMeson[] }>("/api/meson/servicios?todos=1")
+      .then((datos) => setFilas(datos.servicios))
+      .catch((falla: unknown) => { setFilas([]); setError(falla instanceof Error ? falla.message : "No se pudieron leer los servicios."); });
+  }
+  useEffect(cargar, []);
+  async function guardar(id: string, cambios: Record<string, unknown>) {
+    setError("");
+    try {
+      await api(`/api/config/servicios-meson/${id}`, { method: "PATCH", body: cambios });
+      setEditando((prev) => { const copia = { ...prev }; delete copia[id]; return copia; });
+      cargar();
+    } catch (falla) {
+      setError(falla instanceof Error ? falla.message : "No se pudo guardar.");
+    }
+  }
+  async function mover(indice: number, delta: number) {
+    const lista = [...activos];
+    const [item] = lista.splice(indice, 1);
+    lista.splice(indice + delta, 0, item);
+    setError("");
+    try {
+      for (const [posicion, servicio] of lista.entries()) {
+        const orden = (posicion + 1) * 10;
+        if (servicio.orden !== orden) await api(`/api/config/servicios-meson/${servicio.id}`, { method: "PATCH", body: { orden } });
+      }
+    } catch (falla) {
+      setError(falla instanceof Error ? falla.message : "No se pudo ordenar.");
+    }
+    cargar();
+  }
+  async function agregar(evento: FormEvent) {
+    evento.preventDefault();
+    setError("");
+    try {
+      await api("/api/config/servicios-meson", { method: "POST", body: { nombre } });
+      setNombre("");
+      cargar();
+    } catch (falla) {
+      setError(falla instanceof Error ? falla.message : "No se pudo crear el servicio.");
+    }
+  }
+  const activos = (filas ?? []).filter((fila) => fila.activo === 1);
+  return (
+    <div className="grid gap-4">
+      {error ? <Aviso>{error}</Aviso> : null}
+      {!filas ? <Cargando texto="Cargando servicios…" /> : null}
+      {filas && filas.length === 0 ? <Vacio texto="Sin servicios" /> : null}
+      {filas && filas.length > 0 ? (
+        <div className="overflow-hidden rounded-lg border border-line">
+          <table className="w-full text-left text-sm">
+            <caption className="sr-only">Servicios del mesón</caption>
+            <thead className="bg-paper text-[11px] uppercase tracking-wide text-muted">
+              <tr><th className="w-20 px-3 py-2">Orden</th><th className="px-3 py-2">Servicio</th><th className="w-28 px-3 py-2">Estado</th><th className="w-48 px-3 py-2 text-right"><span className="sr-only">Acciones</span></th></tr>
+            </thead>
+            <tbody>
+              {filas.map((fila) => {
+                const indice = activos.findIndex((item) => item.id === fila.id);
+                const enEdicion = editando[fila.id] !== undefined;
+                return (
+                  <tr key={fila.id} className={`border-t border-line ${fila.activo ? "" : "text-muted"}`}>
+                    <td className="px-3 py-1.5">
+                      {fila.activo ? (
+                        <span className="flex gap-1">
+                          <button type="button" aria-label={`Subir ${fila.nombre}`} disabled={indice <= 0} className="h-7 w-7 rounded border border-line disabled:opacity-30" onClick={() => void mover(indice, -1)}>↑</button>
+                          <button type="button" aria-label={`Bajar ${fila.nombre}`} disabled={indice < 0 || indice >= activos.length - 1} className="h-7 w-7 rounded border border-line disabled:opacity-30" onClick={() => void mover(indice, 1)}>↓</button>
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-1.5">
+                      {enEdicion ? (
+                        <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); void guardar(fila.id, { nombre: editando[fila.id] }); }}>
+                          <label className="sr-only" htmlFor={`srv-${fila.id}`}>Nombre</label>
+                          <input id={`srv-${fila.id}`} className={claseCampo} value={editando[fila.id]} autoFocus onChange={(e) => setEditando((prev) => ({ ...prev, [fila.id]: e.target.value }))} />
+                          <button type="submit" className="btn bg-pine text-white">Guardar</button>
+                          <button type="button" className="btn border border-line bg-white" onClick={() => setEditando((prev) => { const copia = { ...prev }; delete copia[fila.id]; return copia; })}>Cancelar</button>
+                        </form>
+                      ) : fila.nombre}
+                    </td>
+                    <td className="px-3 py-1.5"><span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${fila.activo ? "bg-[#e5f6ec] text-[#146c43]" : "bg-[#eef1f5] text-[#586a80]"}`}>{fila.activo ? "Activo" : "Inactivo"}</span></td>
+                    <td className="px-3 py-1.5 text-right">
+                      {!enEdicion ? <button type="button" className="mr-1 rounded-md border border-line px-2.5 py-1 text-[13px] font-semibold hover:bg-paper" onClick={() => setEditando((prev) => ({ ...prev, [fila.id]: fila.nombre }))}>Editar</button> : null}
+                      <button type="button" className="rounded-md border border-line px-2.5 py-1 text-[13px] font-semibold hover:bg-paper" onClick={() => void guardar(fila.id, { activo: fila.activo !== 1 })}>{fila.activo ? "Desactivar" : "Activar"}</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      <form onSubmit={agregar} className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+        <Campo id="nuevo-servicio" etiqueta="Nuevo servicio"><input id="nuevo-servicio" className={claseCampo} value={nombre} minLength={3} maxLength={80} onChange={(e) => setNombre(e.target.value)} required /></Campo>
+        <Boton>Agregar</Boton>
+      </form>
     </div>
   );
 }

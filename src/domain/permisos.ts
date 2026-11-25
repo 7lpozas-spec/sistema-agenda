@@ -55,3 +55,8 @@ export function vistaDe(rol: Rol): "admin" | "operador" | "instructor" | "recepc
   if (rol === "RECEPCION") return "recepcion";
   return "operador";
 }
+
+/** El mesón registra y atiende a quienes vienen sin hora. */
+export function puedeAtenderMeson(rol: Rol): boolean {
+  return rol === "ADMIN" || rol === "RECEPCION";
+}

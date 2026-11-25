@@ -48,6 +48,17 @@ const contexto = await browser.newContext({ viewport: { width: 1280, height: 800
 const page = await contexto.newPage();
 page.setDefaultTimeout(90_000);
 
+function digito(cuerpo) {
+  let suma = 0;
+  let factor = 2;
+  for (const c of String(cuerpo).split("").reverse()) {
+    suma += Number(c) * factor;
+    factor = factor === 7 ? 2 : factor + 1;
+  }
+  const resto = 11 - (suma % 11);
+  return resto === 11 ? "0" : resto === 10 ? "K" : String(resto);
+}
+
 try {
   await page.goto(`${base}/login`);
   await page.getByRole("heading", { name: "Ingreso" }).waitFor();
@@ -150,9 +161,26 @@ try {
   await page.getByRole("button", { name: "Salir" }).click();
   await page.getByRole("heading", { name: "Ingreso" }).waitFor();
   await entrar(page, "instructor@ejemplo.cl", clave("LICENCIAS_CLAVE_INSTRUCTOR"));
+  await page.getByRole("heading", { name: "Dashboard" }).waitFor();
+  assert.equal(await page.getByRole("link", { name: "Agenda general", exact: true }).count(), 0);
+  assert.equal(await page.getByRole("link", { name: "Atención", exact: true }).count(), 0);
+  await page.getByRole("link", { name: "Primera vez", exact: true }).click();
   await page.getByRole("heading", { name: "Agenda primera vez" }).waitFor();
-  assert.equal(await page.getByRole("link", { name: "Dashboard" }).count(), 0);
   await page.screenshot({ path: `${salida}/06-atencion.png`, fullPage: true });
+
+  await page.getByRole("button", { name: "Salir" }).click();
+  await entrar(page, "recepcion@ejemplo.cl", clave("LICENCIAS_CLAVE_RECEPCION"));
+  await page.getByRole("heading", { name: "Atención del día" }).waitFor();
+  await page.getByRole("tab", { name: /Sin hora/ }).click();
+  const cuerpoRut = 31000600 + Math.floor(Math.random() * 300000);
+  const nombreSinHora = `Persona Ficticia ${cuerpoRut % 1000}`;
+  const formulario = page.getByRole("form", { name: "Registrar sin hora" });
+  await formulario.getByLabel("RUT").fill(`${cuerpoRut}${digito(cuerpoRut)}`);
+  await formulario.getByLabel("Nombre").fill(nombreSinHora);
+  await formulario.getByLabel("Servicio").selectOption({ index: 0 });
+  await formulario.getByRole("button", { name: "Registrar" }).click();
+  await page.getByRole("cell", { name: new RegExp(nombreSinHora) }).first().waitFor();
+  await page.screenshot({ path: `${salida}/07-sin-hora.png`, fullPage: false });
 
   await page.getByRole("button", { name: "Salir" }).click();
   await entrar(page, "admin@ejemplo.cl", clave("LICENCIAS_CLAVE_ADMIN"));
@@ -164,7 +192,7 @@ try {
   await page.getByLabel("Correo remitente").fill("licencias@ejemplo.cl");
   await Promise.all([
     page.waitForResponse((respuesta) => respuesta.url().includes("/api/parametros") && respuesta.request().method() === "PATCH" && respuesta.ok()),
-    page.getByRole("button", { name: "Guardar parámetros" }).click(),
+    page.getByRole("button", { name: "Guardar", exact: true }).click(),
   ]);
   await page.screenshot({ path: `${salida}/08-parametros.png`, fullPage: true });
   await page.getByRole("tab", { name: "Cuentas" }).click();

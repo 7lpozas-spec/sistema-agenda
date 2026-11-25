@@ -125,13 +125,13 @@ function Marco() {
         Saltar al contenido
       </a>
       <header className="sticky top-0 z-30 border-b border-white/10 bg-pine text-white shadow-sm">
-        <div className="mx-auto flex h-[4.25rem] max-w-[1440px] items-center gap-4 px-3 sm:h-20 sm:gap-6 sm:px-6">
+        <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-4 px-3 sm:gap-6 sm:px-5">
           <img
             src="/logo-recoleta-blanco.png"
             alt="Municipalidad de Recoleta"
             width={600}
             height={231}
-            className="h-12 w-auto shrink-0 sm:h-14"
+            className="h-9 w-auto shrink-0 sm:h-10"
           />
           <nav
             aria-label="Secciones"
@@ -229,7 +229,7 @@ function Marco() {
       ) : null}
       <main
         id="contenido"
-        className="mx-auto w-full max-w-[1440px] px-4 py-6 sm:px-6 sm:py-6"
+        className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:px-5"
       >
         <Outlet />
       </main>

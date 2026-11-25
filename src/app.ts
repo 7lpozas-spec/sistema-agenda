@@ -13,7 +13,7 @@ import {
 import { enmascararRut, formatearRut, normalizarRut } from "./domain/rut";
 import { bloquesDeTipo } from "./servicios/reservas";
 import { evaluarTipo } from "./domain/reglas";
-import { agendasDeCitas, puedeBloquear, puedeConfirmarAsistencia, puedeCrearCita, puedeExportar, puedeFotografiar, puedeMarcarResultado, puedeVerAgenda, puedeVerCupos, puedeVerDashboard } from "./domain/permisos";
+import { agendasDeCitas, puedeBloquear, puedeConfirmarAsistencia, puedeCrearCita, puedeExportar, puedeFotografiar, puedeMarcarResultado, puedeVerAgenda, puedeVerCupos, puedeVerDashboard, puedeAtenderMeson } from "./domain/permisos";
 import { bloquePosterior, fechaValida, partesEnZona, sumarDias } from "./domain/tiempo";
 import { correoValido, limpiarLinea, limpiarParrafo } from "./domain/texto";
 import { quitarExif } from "./domain/exif";
@@ -28,7 +28,9 @@ import { regenerarCupos } from "./servicios/generar";
 import { armarEstadisticas, filtroDe, listadoCitas, type Estadisticas, type FiltroEstadistica } from "./servicios/estadisticas";
 import { cerrarJornadasAutomaticas, citasDelCierre, confirmarCierre, marcarInasistenciasVencidas, proponerTrasCierre } from "./servicios/jornada";
 import { armarPanel } from "./servicios/panel";
+import { buscarPersona, cambiarEstadoAtencion, cerrarMesonPendiente, crearServicio, editarServicio, esEstadoMeson, listarDia, listarServicios, numeroTexto, registrarAtencion, resumenMeson } from "./servicios/meson";
 import { libroXlsx, reportePdf } from "./exportar/documentos";
+import { comprobantePdf } from "./exportar/comprobante";
 import { candado, sala } from "./locks";
 import { publicarEnDrive } from "./services/almacen";
 type Variables = { usuario: Usuario; csrfHash: string };
@@ -229,7 +231,11 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     const hoy = partesEnZona(new Date(), "America/Santiago").fecha;
     const filtro = filtroVisible(usuario, { desde: c.req.query("desde"), hasta: c.req.query("hasta"), agenda: c.req.query("agenda") }, hoy);
     const mes = c.req.query("mes") && /^\d{4}-\d{2}$/.test(c.req.query("mes") ?? "") ? c.req.query("mes")! : hoy.slice(0, 7);
-    return c.json(await armarPanel(c.env.DB, usuario.rol, filtro.desde, filtro.hasta, mes, new Date(), hoy));
+    const panel = await armarPanel(c.env.DB, usuario.rol, filtro.desde, filtro.hasta, mes, new Date(), hoy);
+    const meson = puedeAtenderMeson(usuario.rol)
+      ? { hoy: await resumenMeson(c.env.DB, hoy, hoy), periodo: await resumenMeson(c.env.DB, filtro.desde, filtro.hasta) }
+      : null;
+    return c.json({ ...panel, meson });
   });
 
   api.get("/agendas/:id/proxima-fecha", async (c) => {
@@ -499,14 +505,14 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     const q = limpiarLinea(c.req.query("q") ?? "");
     const rut = normalizarRut(q);
     const filas = await c.env.DB.prepare(
-      `SELECT c.id, c.hora, c.agenda_id, c.estado, c.es_sobrecupo, c.docs_cargados, c.docs_requeridos, c.atencion_at,
+      `SELECT c.id, c.hora, c.agenda_id, c.estado, c.es_sobrecupo, c.docs_cargados, c.docs_requeridos, c.atencion_at, c.asistencia_at,
               t.nombre AS tramite, ci.rut, ci.nombres, ci.apellidos
        FROM citas c JOIN ciudadanos ci ON ci.id = c.ciudadano_id JOIN tipos_tramite t ON t.id = c.tipo_tramite_id
        WHERE c.fecha = ? AND c.estado NOT IN ('CANCELADA', 'ANULADA')
          AND (? = '' OR c.agenda_id = ?)
-         AND (? = '' OR ci.rut = ? OR ci.apellidos LIKE ?)
+         AND (? = '' OR ci.rut = ? OR ci.apellidos LIKE ? OR ci.nombres LIKE ? OR upper(substr(c.id, 1, 8)) = upper(?))
        ORDER BY c.hora, c.agenda_id`,
-    ).bind(fecha, agendaFiltro, agendaFiltro, q, rut ?? "", `%${q.replace(/[\\%_]/g, (s) => `\\${s}`)}%`).all<{
+    ).bind(fecha, agendaFiltro, agendaFiltro, q, rut ?? "", `%${q.replace(/[\\%_]/g, (s) => `\\${s}`)}%`, `%${q.replace(/[\\%_]/g, (s) => `\\${s}`)}%`, q).all<{
       id: string; hora: string; agenda_id: string; estado: string; es_sobrecupo: number; docs_cargados: number; docs_requeridos: number; tramite: string; rut: string; nombres: string; apellidos: string;
     }>();
     return c.json({
@@ -1019,15 +1025,118 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     return c.json({ reubicadas: hechos.length, citas: hechos });
   });
 
+  api.get("/meson/servicios", async (c) => {
+    const usuario = c.get("usuario");
+    if (!puedeAtenderMeson(usuario.rol)) throw new ErrorApp(403, "SIN_PERMISO", "Su rol no atiende en el mesón.");
+    return c.json({ servicios: await listarServicios(c.env.DB, usuario.rol === "ADMIN" && c.req.query("todos") === "1") });
+  });
+  api.post("/config/servicios-meson", async (c) => {
+    if (c.get("usuario").rol !== "ADMIN") throw new ErrorApp(403, "SIN_PERMISO", "Solo administración edita los servicios.");
+    const cuerpo = await leerJson(c.req.raw);
+    const servicio = await crearServicio(c.env.DB, texto(cuerpo.nombre, "El nombre", 3, 80));
+    await auditar(c.env.DB, { usuarioId: c.get("usuario").id, accion: "crear_servicio_meson", entidad: "servicio_meson", entidadId: servicio.id, despues: servicio, ip: ipDe(c.req.raw) });
+    return c.json({ servicio }, 201);
+  });
+  api.patch("/config/servicios-meson/:id", async (c) => {
+    if (c.get("usuario").rol !== "ADMIN") throw new ErrorApp(403, "SIN_PERMISO", "Solo administración edita los servicios.");
+    const cuerpo = await leerJson(c.req.raw);
+    const servicio = await editarServicio(c.env.DB, c.req.param("id"), {
+      nombre: cuerpo.nombre === undefined ? undefined : texto(cuerpo.nombre, "El nombre", 3, 80),
+      activo: cuerpo.activo === undefined ? undefined : cuerpo.activo === true,
+      orden: typeof cuerpo.orden === "number" ? cuerpo.orden : undefined,
+    });
+    await auditar(c.env.DB, { usuarioId: c.get("usuario").id, accion: "editar_servicio_meson", entidad: "servicio_meson", entidadId: servicio.id, despues: servicio, ip: ipDe(c.req.raw) });
+    return c.json({ servicio });
+  });
+  api.get("/meson/persona", async (c) => {
+    if (!puedeAtenderMeson(c.get("usuario").rol)) throw new ErrorApp(403, "SIN_PERMISO", "Su rol no atiende en el mesón.");
+    const rut = normalizarRut(c.req.query("rut") ?? "");
+    if (!rut) throw new ErrorApp(400, "RUT_INVALIDO", "El RUT no es válido. Revise el dígito verificador.");
+    return c.json(await buscarPersona(c.env.DB, rut, partesEnZona(new Date(), "America/Santiago").fecha));
+  });
+  api.get("/meson", async (c) => {
+    const usuario = c.get("usuario");
+    if (!puedeAtenderMeson(usuario.rol)) throw new ErrorApp(403, "SIN_PERMISO", "Su rol no atiende en el mesón.");
+    const hoy = partesEnZona(new Date(), "America/Santiago").fecha;
+    const fecha = c.req.query("fecha") ?? hoy;
+    if (!fechaValida(fecha)) throw new ErrorApp(400, "DATO_INVALIDO", "La fecha no es válida.");
+    if (usuario.rol !== "ADMIN" && fecha !== hoy) throw new ErrorApp(403, "SIN_PERMISO", "Recepción solo ve las atenciones de hoy.");
+    const q = limpiarLinea(c.req.query("q") ?? "").slice(0, 60);
+    const atenciones = await listarDia(c.env.DB, fecha, q, normalizarRut(q));
+    return c.json({ fecha, atenciones, resumen: await resumenMeson(c.env.DB, fecha, fecha) });
+  });
+  api.post("/meson", async (c) => {
+    const usuario = c.get("usuario");
+    if (!puedeAtenderMeson(usuario.rol)) throw new ErrorApp(403, "SIN_PERMISO", "Su rol no registra atenciones de mesón.");
+    const clave = c.req.header("idempotency-key");
+    if (clave) {
+      const previa = await c.env.DB.prepare("SELECT estado_http, cuerpo FROM idempotencia WHERE usuario_id = ? AND clave = ?")
+        .bind(usuario.id, clave).first<{ estado_http: number; cuerpo: string }>();
+      if (previa) return c.json(JSON.parse(previa.cuerpo), previa.estado_http as 201);
+    }
+    const cuerpo = await leerJson(c.req.raw);
+    const rut = normalizarRut(typeof cuerpo.rut === "string" ? cuerpo.rut : "");
+    if (!rut) throw new ErrorApp(400, "RUT_INVALIDO", "El RUT no es válido. Revise el dígito verificador.");
+    const nombre = texto(cuerpo.nombre, "El nombre", 3, 120);
+    const servicioId = texto(cuerpo.servicioId, "El servicio", 2, 60);
+    const observacion = typeof cuerpo.observacion === "string" && cuerpo.observacion.trim() ? limpiarParrafo(cuerpo.observacion).slice(0, 300) : null;
+    const ahora = new Date();
+    const fecha = partesEnZona(ahora, "America/Santiago").fecha;
+    const atencion = await registrarAtencion(c.env.DB, { rut, nombre, servicioId, observacion, usuarioId: usuario.id, fecha, ahora });
+    const respuesta = { atencion: { ...atencion, rut: formatearRut(rut), numeroTexto: numeroTexto(atencion.numero) } };
+    if (clave) await c.env.DB.prepare("INSERT INTO idempotencia (clave, usuario_id, estado_http, cuerpo, creado_at) VALUES (?, ?, 201, ?, ?)")
+      .bind(clave, usuario.id, JSON.stringify(respuesta), ahora.toISOString()).run();
+    await auditar(c.env.DB, { usuarioId: usuario.id, accion: "registrar_meson", entidad: "atencion_meson", entidadId: atencion.id, despues: { numero: atencion.numero, servicio: atencion.servicio }, ip: ipDe(c.req.raw) });
+    await avisarOficina(c.env, { tipo: "meson", fecha });
+    return c.json(respuesta, 201);
+  });
+  api.post("/meson/:id/estado", async (c) => {
+    const usuario = c.get("usuario");
+    if (!puedeAtenderMeson(usuario.rol)) throw new ErrorApp(403, "SIN_PERMISO", "Su rol no atiende en el mesón.");
+    const cuerpo = await leerJson(c.req.raw);
+    const estado = typeof cuerpo.estado === "string" ? cuerpo.estado : "";
+    if (!esEstadoMeson(estado)) throw new ErrorApp(400, "DATO_INVALIDO", "El estado no es válido.");
+    const ahora = new Date();
+    const resultado = await cambiarEstadoAtencion(c.env.DB, {
+      id: c.req.param("id"), estado, usuarioId: usuario.id, esAdmin: usuario.rol === "ADMIN",
+      hoy: partesEnZona(ahora, "America/Santiago").fecha, ahora,
+      minutosDeshacer: Number(await parametro(c.env.DB, "minutos_deshacer_asistencia", "15")),
+    });
+    await auditar(c.env.DB, { usuarioId: usuario.id, accion: "estado_meson", entidad: "atencion_meson", entidadId: c.req.param("id"), antes: { estado: resultado.antes }, despues: { estado: resultado.despues }, ip: ipDe(c.req.raw) });
+    await avisarOficina(c.env, { tipo: "meson" });
+    return c.json({ ok: true, atencion: resultado.fila });
+  });
+  api.get("/export/meson.csv", async (c) => {
+    if (c.get("usuario").rol !== "ADMIN") throw new ErrorApp(403, "SIN_PERMISO", "Solo administración exporta el mesón.");
+    const hoy = partesEnZona(new Date(), "America/Santiago").fecha;
+    const desde = fechaValida(c.req.query("desde") ?? "") ? c.req.query("desde")! : hoy;
+    const hasta = fechaValida(c.req.query("hasta") ?? "") ? c.req.query("hasta")! : hoy;
+    const filas = await c.env.DB.prepare(
+      `SELECT a.fecha, a.numero, a.rut, a.nombre, COALESCE(s.nombre, a.servicio_id) AS servicio, a.estado, a.llegada_at, a.atencion_at, a.termino_at,
+              COALESCE(r.nombre, '') AS registro, COALESCE(t.nombre, '') AS atendio, COALESCE(a.observacion, '') AS observacion
+       FROM atenciones_meson a LEFT JOIN servicios_meson s ON s.id = a.servicio_id
+       LEFT JOIN usuarios r ON r.id = a.registrado_por LEFT JOIN usuarios t ON t.id = a.atendido_por
+       WHERE a.fecha >= ? AND a.fecha <= ? ORDER BY a.fecha, a.numero LIMIT 20000`,
+    ).bind(desde, hasta).all<Record<string, string | number | null>>();
+    const celda = (valor: unknown) => `"${String(valor ?? "").replace(/"/g, '""')}"`;
+    const lineas = [["Fecha", "Número", "RUT", "Nombre", "Servicio", "Estado", "Llegada", "Atención", "Término", "Registró", "Atendió", "Observación"].map(celda).join(";")];
+    for (const f of filas.results) {
+      lineas.push([f.fecha, numeroTexto(Number(f.numero)), formatearRut(String(f.rut)), f.nombre, f.servicio, f.estado, f.llegada_at, f.atencion_at, f.termino_at, f.registro, f.atendio, f.observacion].map(celda).join(";"));
+    }
+    await auditar(c.env.DB, { usuarioId: c.get("usuario").id, accion: "exportar_meson", entidad: "atencion_meson", despues: { desde, hasta, filas: filas.results.length }, ip: ipDe(c.req.raw) });
+    return binario(c, new TextEncoder().encode(`\ufeff${lineas.join("\r\n")}`), "text/csv; charset=utf-8", `meson-${desde}-${hasta}.csv`, "attachment");
+  });
+
   api.post("/jornada/cerrar", async (c) => {
     const usuario = c.get("usuario");
     if (usuario.rol !== "ADMIN" && usuario.rol !== "RECEPCION") throw new ErrorApp(403, "SIN_PERMISO", "No puede cerrar la jornada.");
     const ahora = new Date();
     const hoy = partesEnZona(ahora, "America/Santiago").fecha;
     const marcadas = await marcarInasistenciasVencidas(c.env.DB, hoy, ahora, usuario.id);
-    await auditar(c.env.DB, { usuarioId: usuario.id, accion: "cerrar_jornada", entidad: "cita", despues: { fecha: hoy, marcadas }, ip: ipDe(c.req.raw) });
+    const sinHora = await cerrarMesonPendiente(c.env.DB, hoy, true, ahora, usuario.id);
+    await auditar(c.env.DB, { usuarioId: usuario.id, accion: "cerrar_jornada", entidad: "cita", despues: { fecha: hoy, marcadas, sinHora }, ip: ipDe(c.req.raw) });
     await avisarOficina(c.env, { tipo: "agenda", fecha: hoy });
-    return c.json({ marcadas });
+    return c.json({ marcadas, sinHora });
   });
 
   api.get("/citas/:id/comprobante.pdf", async (c) => {
@@ -1039,15 +1148,43 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     if (usuario.rol === "RECEPCION" && cita.fecha !== hoy) throw new ErrorApp(403, "SIN_PERMISO", "Recepción solo ve las citas de hoy.");
     const tipo = await tipoPorId(c.env.DB, cita.tipo_tramite_id);
     const direccion = await parametro(c.env.DB, "direccion_atencion");
-    const pdf = reportePdf("Comprobante de cita", [
-      "Municipalidad de Recoleta · Dirección de Tránsito",
-      `${cita.nombres} ${cita.apellidos}`,
-      formatearRut(cita.rut),
-      `${cita.tramite} · ${cita.agenda_id === "PRIMERA_VEZ" ? "Primera vez" : "General"}`,
-      `${formatearFecha(cita.fecha)} ${cita.hora}`,
-      `Documentos: ${tipo ? textoDocumentos(tipo) : "cédula de identidad"}`,
+    const extra = await c.env.DB.prepare(
+      `SELECT c.creado_at, COALESCE(u.nombre, 'Sin registro') AS registrado_por, a.duracion_bloque_min
+       FROM citas c LEFT JOIN usuarios u ON u.id = c.creado_por LEFT JOIN agendas a ON a.id = c.agenda_id WHERE c.id = ?`,
+    ).bind(cita.id).first<{ creado_at: string; registrado_por: string; duracion_bloque_min: number | null }>();
+    let clases: string[] = [];
+    try {
+      const valor = JSON.parse(cita.clases) as unknown;
+      if (Array.isArray(valor)) clases = valor.filter((item): item is string => typeof item === "string");
+    } catch {
+      clases = [];
+    }
+    const documentos = tipo
+      ? [
+        ...(tipo.requiere_carnet ? ["Cédula de identidad vigente"] : []),
+        ...(tipo.requiere_licencia ? ["Licencia de conducir anterior"] : []),
+      ]
+      : [];
+    const pdf = comprobantePdf({
+      folio: cita.id.slice(0, 8).toUpperCase(),
+      estado: cita.estado,
+      esSobrecupo: cita.es_sobrecupo === 1,
+      nombre: `${cita.nombres} ${cita.apellidos}`,
+      rut: formatearRut(cita.rut),
+      tramite: cita.tramite,
+      agenda: cita.agenda_id,
+      clases,
+      examenTeorico: tipo?.examen_teorico === 1,
+      examenPractico: tipo?.examen_practico === 1,
+      fecha: cita.fecha,
+      hora: cita.hora,
+      duracionMin: tipo?.duracion_slot_min ?? extra?.duracion_bloque_min ?? 15,
       direccion,
-    ]);
+      documentos: documentos.length ? documentos : ["Cédula de identidad vigente"],
+      registradoPor: extra?.registrado_por ?? "Sin registro",
+      registradoAt: extra?.creado_at ?? "",
+      emitidoAt: new Date(),
+    });
     return binario(c, pdf, "application/pdf", `cita-${cita.id.slice(0, 8)}.pdf`, "inline");
   });
 
@@ -1461,6 +1598,7 @@ export async function tareasProgramadas(env: Env, ahora = new Date()): Promise<v
   const gracia = Number(mapa.gracia_cierre_minutos ?? "30");
   const horaRecordatorio = mapa.hora_recordatorio ?? "10:00";
   await cerrarJornadasAutomaticas(env.DB, ahora, Number.isFinite(gracia) ? gracia : 30);
+  await cerrarMesonPendiente(env.DB, partesEnZona(ahora, "America/Santiago").fecha, false, ahora, null);
   if (partes.hora !== horaRecordatorio) return;
   const citas = await env.DB.prepare(
     `SELECT c.id, c.fecha, c.hora, c.agenda_id, t.nombre AS tramite, t.requiere_carnet, t.requiere_licencia,

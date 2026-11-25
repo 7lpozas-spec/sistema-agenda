@@ -37,9 +37,11 @@ await applyD1Migrations(env.DB, [
   { name: "0011_gracia_cierre.sql", queries: [
     `INSERT INTO parametros (clave, valor, descripcion) VALUES ('gracia_cierre_minutos', '30', 'Minutos después del fin del último bloque para marcar inasistencias.') ON CONFLICT(clave) DO NOTHING`,
   ] },
+  { name: "0012_atencion_meson.sql", queries: dividirSql(enlace.MIGRATION_MESON ?? "") },
 ]);
 
 const TABLAS = [
+  "atenciones_meson",
   "cola_drive",
   "idempotencia",
   "correos_log",

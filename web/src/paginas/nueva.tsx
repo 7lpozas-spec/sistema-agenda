@@ -274,10 +274,10 @@ export function NuevaCita() {
   }
 
   return (
-    <div className="fixed inset-0 z-40 overflow-y-auto bg-[#141b2b]/55 px-3 py-6 sm:px-4 sm:py-10">
+    <div className="fixed inset-0 z-40 overflow-y-auto bg-[#141b2b]/55 px-3 py-4 sm:px-4 sm:py-6">
       <form
         onSubmit={enviar}
-        className="superficie booking-form mx-auto grid w-full max-w-2xl gap-5 p-5 sm:p-8"
+        className="superficie booking-form mx-auto grid w-full max-w-2xl gap-4 p-4 sm:p-6"
       >
         <div className="flex items-start justify-between gap-3">
           <h1 className="page-title">Nueva cita</h1>

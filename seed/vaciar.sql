@@ -10,6 +10,8 @@ DROP TABLE IF EXISTS documentos;
 DROP TABLE IF EXISTS sesiones_captura;
 DROP TABLE IF EXISTS cita_historial;
 DROP TABLE IF EXISTS atenciones_sin_hora;
+DROP TABLE IF EXISTS atenciones_meson;
+DROP TABLE IF EXISTS servicios_meson;
 DROP TABLE IF EXISTS citas;
 DROP TABLE IF EXISTS cupos_bloque;
 DROP TABLE IF EXISTS cupos_dia;

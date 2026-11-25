@@ -93,7 +93,7 @@
     margin-bottom: 6px;
   }
   .page-title {
-    font-size: clamp(1.5rem, 2.4vw, 1.875rem);
+    font-size: 1.25rem;
     font-weight: 600;
     letter-spacing: -0.035em;
     line-height: 1.2;
@@ -103,7 +103,7 @@
     align-items: center;
     gap: 8px;
     border-radius: 8px;
-    padding: 11px 12px;
+    padding: 8px 11px;
     font-size: 13px;
     font-weight: 500;
     color: #c8d3e4;
@@ -495,5 +495,19 @@
     textarea {
       font-size: 16px;
     }
+  }
+}
+
+@layer components {
+  .cal-compacto .cal-dia {
+    min-height: 2.6rem;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.25rem;
+    padding: 0.25rem 0.45rem;
+  }
+  .cal-compacto .cal-meta {
+    margin-top: 0;
   }
 }

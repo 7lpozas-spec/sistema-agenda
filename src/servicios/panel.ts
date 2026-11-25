@@ -258,6 +258,9 @@ export async function armarPanel(
             ci.apellidos || ', ' || ci.nombres, c.agenda_id, c.fecha, c.hora
      FROM citas c LEFT JOIN usuarios u ON u.id = c.asistencia_marcada_por JOIN ciudadanos ci ON ci.id = c.ciudadano_id
      WHERE c.asistencia_marcada_por IS NOT NULL AND c.agenda_id IN (${claves})
+     ${vista === "recepcion" || vista === "admin" ? `UNION ALL
+     SELECT a.llegada_at, COALESCE(u.nombre, 'Sin registro'), 'Registró sin hora', a.nombre, 'MESON', a.fecha, ''
+     FROM atenciones_meson a LEFT JOIN usuarios u ON u.id = a.registrado_por` : ""}
      ORDER BY 1 DESC LIMIT 8`,
   ).bind(...agendas, ...agendas).all<Reciente>();
   const listaHoy = citasHoy.results.map((cita) => ({ ...cita, docsCargados: num(cita.docsCargados), docsRequeridos: num(cita.docsRequeridos) }));
