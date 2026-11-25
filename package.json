@@ -1,0 +1,43 @@
+{
+  "name": "licencias-recoleta",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sistema de agendamiento de licencias de conducir de la Municipalidad de Recoleta.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler d1 migrations apply licencias_recoleta --local && vite build && wrangler dev --port 43123 --ip 127.0.0.1 --local",
+    "build": "vite build",
+    "types": "wrangler types --strict-vars false",
+    "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p web/tsconfig.json",
+    "test:unit": "vitest run --config vitest.unit.config.ts --coverage",
+    "test:integration": "vitest run --config vitest.config.ts",
+    "test:e2e": "node test/e2e/recorrido.mjs",
+    "test": "npm run test:unit && npm run test:integration",
+    "db:migrate:local": "wrangler d1 migrations apply licencias_recoleta --local",
+    "deploy:test": "node scripts/deploy-test.mjs"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "hono": "^4.13.22",
+    "lucide-react": "^1.79.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router-dom": "^7.18.7",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.9.2",
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/react": "^19.3.1",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "@vitest/coverage-v8": "^4.1.0",
+    "playwright": "^1.65.1",
+    "tailwindcss": "^4.3.5",
+    "typescript": "^7.0.2",
+    "vite": "^6.4.6",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.168.0"
+  }
+}

@@ -1,0 +1,22 @@
+# Copie este archivo a .dev.vars para el desarrollo local.
+# .dev.vars no se versiona. En producción use `wrangler secret put` y no deje
+# AUTO_SEED en true.
+
+# r2 guarda las fotos en el bucket local. drive exige las tres variables de Google.
+PHOTO_BACKEND=r2
+
+# Iteraciones PBKDF2-SHA256. 100000 es el valor de partida. Suba este número
+# antes de cualquier uso real si el tiempo de ingreso sigue siendo aceptable.
+PBKDF2_ITERATIONS=100000
+
+# Cuenta de servicio con permiso de edición sobre una carpeta dedicada.
+# La clave PEM puede ir con saltos de línea escapados como \n.
+GOOGLE_SERVICE_ACCOUNT_EMAIL=
+GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY=
+GOOGLE_DRIVE_FOLDER_ID=
+
+# Claves locales de las cuentas ficticias. No las escriba en el repositorio.
+# scripts/crear-cuentas-demo.mjs y el recorrido e2e las leen del entorno.
+LICENCIAS_CLAVE_ADMIN=
+LICENCIAS_CLAVE_OPERADOR=
+LICENCIAS_CLAVE_INSTRUCTOR=

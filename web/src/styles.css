@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", "Segoe UI", system-ui, sans-serif;
+  --color-paper: #f4f1ec;
+  --color-ink: #1c1916;
+  --color-pine: #1e283c;
+  --color-pine-dark: #141b2b;
+  --color-line: #e6e0d6;
+  --color-card: #fffcf8;
+  --color-muted: #6f675f;
+  --color-alert: #b42318;
+  --color-sky: #3d5fd4;
+  --color-amber: #9a5b00;
+  --color-sidebar: #1e283c;
+  --shadow-card: 0 1px 2px rgb(28 25 22 / 0.04), 0 8px 24px rgb(30 40 60 / 0.05);
+  --radius-card: 14px;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-feature-settings: "cv11", "ss01";
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+  }
+
+  h1 {
+    letter-spacing: -0.03em;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-sky);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation: none !important;
+      transition: none !important;
+    }
+  }
+}
+
+@layer components {
+  .superficie {
+    border: 1px solid var(--color-line);
+    background: var(--color-card);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+  }
+
+  .btn {
+    display: inline-flex;
+    height: 2.25rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    padding-inline: 0.9rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    transition: background-color 120ms ease, transform 120ms ease;
+  }
+
+  .btn:hover {
+    transform: translateY(-1px);
+  }
+
+  .btn:disabled {
+    transform: none;
+    opacity: 0.45;
+  }
+}

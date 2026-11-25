@@ -1,0 +1,13 @@
+{
+  "name": "Agendamiento de licencias · Recoleta",
+  "short_name": "Licencias Recoleta",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f3f5f7",
+  "theme_color": "#384048",
+  "lang": "es-CL",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

@@ -1,0 +1,13 @@
+interface Env {
+  GOOGLE_SERVICE_ACCOUNT_EMAIL?: string;
+  GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?: string;
+  GOOGLE_DRIVE_FOLDER_ID?: string;
+  GOOGLE_OAUTH_CLIENT_ID?: string;
+  GOOGLE_OAUTH_CLIENT_SECRET?: string;
+  GOOGLE_OAUTH_REFRESH_TOKEN?: string;
+  MAIL_API_KEY?: string;
+  MAIL_API_URL?: string;
+  MIGRATION_SCHEMA?: string;
+  MIGRATION_REFERENCE?: string;
+  MIGRATION_FOTO?: string;
+}
