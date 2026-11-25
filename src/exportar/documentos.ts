@@ -127,10 +127,17 @@ function zipAlmacenado(archivos: { nombre: string; datos: Uint8Array }[]): Uint8
   return unir([...locales, centralBytes, eocd]);
 }
 
+/** Octal de un byte WinAnsi (Windows-1252) dentro de un literal PDF. */
+function octal(byte: number): string {
+  return `\\${byte.toString(8).padStart(3, "0")}`;
+}
+
 const WIN: Record<string, string> = {
-  á: "\\341", é: "\\351", í: "\\355", ó: "\\363", ú: "\\372", ñ: "\\361", ü: "\\374",
-  Á: "\\301", É: "\\311", Í: "\\315", Ó: "\\323", Ú: "\\332", Ñ: "\\321",
-  "¿": "\\277", "¡": "\\241", "°": "\\260",
+  á: octal(0xe1), é: octal(0xe9), í: octal(0xed), ó: octal(0xf3), ú: octal(0xfa), ñ: octal(0xf1), ü: octal(0xfc),
+  Á: octal(0xc1), É: octal(0xc9), Í: octal(0xcd), Ó: octal(0xd3), Ú: octal(0xda), Ñ: octal(0xd1), Ü: octal(0xdc),
+  "¿": octal(0xbf), "¡": octal(0xa1), "°": octal(0xb0), "º": octal(0xba), "ª": octal(0xaa), "·": octal(0xb7),
+  "«": octal(0xab), "»": octal(0xbb), "–": octal(0x96), "—": octal(0x97),
+  "‘": octal(0x91), "’": octal(0x92), "“": octal(0x93), "”": octal(0x94), "…": octal(0x85),
 };
 
 function pdfTexto(valor: string): string {
@@ -173,7 +180,8 @@ export function reportePdf(titulo: string, lineas: string[]): Uint8Array {
       `${id} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents ${contenidos[indice].id} 0 R /Resources << /Font << /F1 ${fuente} 0 R >> >> >> endobj`,
     );
     const stream = contenidos[indice].stream;
-    objetos.push(`${contenidos[indice].id} 0 obj << /Length ${stream.length} >> stream\n${stream}\nendstream endobj`);
+    const largo = new TextEncoder().encode(stream).byteLength;
+    objetos.push(`${contenidos[indice].id} 0 obj << /Length ${largo} >> stream\n${stream}\nendstream endobj`);
   });
   objetos.push(`${fuente} 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> endobj`);
   let cuerpo = "%PDF-1.4\n";
