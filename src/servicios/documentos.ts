@@ -40,3 +40,15 @@ export function comprobanteDisponible(estado: string, faltantes: readonly string
   if (estado === "CANCELADA" || estado === "ANULADA") return true;
   return faltantes.length === 0;
 }
+
+/** D1 remoto entrega los BLOB como arreglo de números; el local, como ArrayBuffer. */
+export function bytesDeBlob(valor: unknown): ArrayBuffer | null {
+  if (valor == null) return null;
+  if (valor instanceof ArrayBuffer) return valor.byteLength > 0 ? valor : null;
+  if (ArrayBuffer.isView(valor)) {
+    if (valor.byteLength === 0) return null;
+    return new Uint8Array(valor.buffer, valor.byteOffset, valor.byteLength).slice().buffer;
+  }
+  if (Array.isArray(valor)) return valor.length > 0 ? Uint8Array.from(valor as number[]).buffer : null;
+  return null;
+}

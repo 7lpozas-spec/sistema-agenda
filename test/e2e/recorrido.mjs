@@ -181,6 +181,9 @@ try {
   }, creada.cita.id);
   assert.equal(pdf.status, 200);
   assert.match(pdf.tipo ?? "", /pdf/);
+  for (const doc of ["Carnet, frente", "Licencia, reverso"]) {
+    await page.waitForFunction((nombre) => { const img = document.querySelector(`img[alt="${nombre}"]`); return Boolean(img && img.complete && img.naturalWidth > 0); }, doc);
+  }
   await page.screenshot({ path: `${salida}/16-foto-en-pc.png`, fullPage: false });
   await cel.close();
 

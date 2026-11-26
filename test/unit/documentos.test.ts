@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { comprobanteDisponible, resumirDocumentos } from "../../src/servicios/documentos";
+import { bytesDeBlob, comprobanteDisponible, resumirDocumentos } from "../../src/servicios/documentos";
 import { piezasConCambios, type Pieza } from "../../src/servicios/generar";
 import { puedeFotografiar } from "../../src/domain/permisos";
 
@@ -51,5 +51,19 @@ describe("regeneración de cupos", () => {
     ];
     const cambios = await piezasConCambios(db(dias, bloques), piezas, "2026-11-25");
     expect(cambios.map((pieza) => `${pieza.fecha} ${pieza.hora}`)).toEqual(["2026-12-01 09:00", "2026-12-02 08:30"]);
+  });
+});
+
+describe("foto guardada en D1", () => {
+  it("lee el BLOB como arreglo de números (D1 remoto) o como ArrayBuffer (local)", () => {
+    const remoto = bytesDeBlob([0xff, 0xd8, 0xff, 0xe0]);
+    expect(remoto && Array.from(new Uint8Array(remoto))).toEqual([0xff, 0xd8, 0xff, 0xe0]);
+    const local = new Uint8Array([1, 2, 3]).buffer;
+    expect(bytesDeBlob(local)).toBe(local);
+    const vista = new Uint8Array([9, 8, 7, 6]).subarray(1, 3);
+    expect(Array.from(new Uint8Array(bytesDeBlob(vista) as ArrayBuffer))).toEqual([8, 7]);
+    expect(bytesDeBlob(null)).toBeNull();
+    expect(bytesDeBlob([])).toBeNull();
+    expect(bytesDeBlob(new ArrayBuffer(0))).toBeNull();
   });
 });

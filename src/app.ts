@@ -29,7 +29,7 @@ import { publicarCuposLote, regenerarCupos } from "./servicios/generar";
 import { armarEstadisticas, filtroDe, listadoCitas, type Estadisticas, type FiltroEstadistica } from "./servicios/estadisticas";
 import { cerrarJornadasAutomaticas, citasDelCierre, confirmarCierre, marcarInasistenciasVencidas, proponerTrasCierre } from "./servicios/jornada";
 import { armarPanel } from "./servicios/panel";
-import { comprobanteDisponible, estadoDocumentos, NOMBRE_DOCUMENTO } from "./servicios/documentos";
+import { bytesDeBlob, comprobanteDisponible, estadoDocumentos, NOMBRE_DOCUMENTO } from "./servicios/documentos";
 import { buscarPersona, cambiarEstadoAtencion, cerrarMesonPendiente, crearServicio, editarServicio, esEstadoMeson, listarDia, listarServicios, numeroTexto, registrarAtencion, resumenMeson } from "./servicios/meson";
 import { libroXlsx, reportePdf } from "./exportar/documentos";
 import { comprobantePdf } from "./exportar/comprobante";
@@ -1418,8 +1418,9 @@ async function guardarEnR2(env: Env, ruta: string, bytes: Uint8Array, mime: stri
   return true;
 }
 
-async function leerFotoGuardada(env: Env, doc: { id: string; ruta: string; drive_file_id: string; contenido: ArrayBuffer | null }): Promise<ArrayBuffer | null> {
-  if (doc.contenido) return doc.contenido;
+async function leerFotoGuardada(env: Env, doc: { id: string; ruta: string; drive_file_id: string; contenido: unknown }): Promise<ArrayBuffer | null> {
+  const local = bytesDeBlob(doc.contenido);
+  if (local) return local;
   const bucket = bucketFotos(env);
   if (bucket) {
     const objeto = await bucket.get(doc.ruta);
