@@ -1,4 +1,4 @@
-import type { AgendaId, Rol } from "../domain/catalogo";
+import { cantidadDocumentosRequeridos, type AgendaId, type Rol } from "../domain/catalogo";
 import { agendasDeCitas, puedeCrearCita, puedeExportar, puedeVerCupos, vistaDe } from "../domain/permisos";
 import { sumarDias } from "../domain/tiempo";
 import { cuposDesdeAhora, diasLaborables, feriadosDelMes, libresPorDia } from "./disponibilidad";
@@ -199,12 +199,12 @@ export async function armarPanel(
     conteoEstado(db, desde, hasta, agendas),
     conteoEstado(db, anteriorDesde, anteriorHasta, agendas),
     db.prepare(
-      `SELECT c.id, c.hora, c.estado, c.agenda_id AS agenda, c.docs_cargados AS docsCargados, (t.requiere_carnet + t.requiere_licencia) * 2 AS docsRequeridos,
-              t.nombre AS tramite, ci.rut, ci.apellidos || ', ' || ci.nombres AS nombre
+      `SELECT c.id, c.hora, c.estado, c.agenda_id AS agenda, c.docs_cargados AS docsCargados, c.tipo_tramite_id,
+              t.requiere_carnet, t.requiere_licencia, t.nombre AS tramite, ci.rut, ci.apellidos || ', ' || ci.nombres AS nombre
        FROM citas c JOIN ciudadanos ci ON ci.id = c.ciudadano_id JOIN tipos_tramite t ON t.id = c.tipo_tramite_id
        WHERE c.fecha = ? AND c.estado NOT IN ('CANCELADA','ANULADA') AND c.agenda_id IN (${claves})
        ORDER BY c.hora, c.agenda_id`,
-    ).bind(hoy, ...agendas).all<CitaDia>(),
+    ).bind(hoy, ...agendas).all<CitaDia & { tipo_tramite_id: string; requiere_carnet: number; requiere_licencia: number }>(),
     db.prepare(
       `SELECT hora,
               SUM(CASE WHEN estado NOT IN ('CANCELADA','ANULADA') THEN 1 ELSE 0 END) AS citados,
@@ -264,7 +264,14 @@ export async function armarPanel(
      FROM atenciones_meson a LEFT JOIN usuarios u ON u.id = a.registrado_por` : ""}
      ORDER BY 1 DESC LIMIT 8`,
   ).bind(...agendas, ...agendas).all<Reciente>();
-  const listaHoy = citasHoy.results.map((cita) => ({ ...cita, docsCargados: num(cita.docsCargados), docsRequeridos: num(cita.docsRequeridos) }));
+  const listaHoy = citasHoy.results.map((cita) => {
+    const { tipo_tramite_id, requiere_carnet, requiere_licencia, ...resto } = cita;
+    return {
+      ...resto,
+      docsCargados: num(cita.docsCargados),
+      docsRequeridos: cantidadDocumentosRequeridos({ agenda_id: cita.agenda, tipo_tramite_id, requiere_carnet, requiere_licencia }),
+    };
+  });
   const proxima = listaHoy.find((cita) => cita.estado === "AGENDADA") ?? null;
   const huecos = [];
   if (puedeVerCupos(rol) && vista !== "recepcion") {

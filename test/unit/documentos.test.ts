@@ -5,11 +5,11 @@ import { puedeFotografiar } from "../../src/domain/permisos";
 
 describe("documentos de la cita", () => {
   it("lista lo que falta según el trámite", () => {
-    const control = resumirDocumentos({ requiere_carnet: 1, requiere_licencia: 1 }, ["CARNET_FRENTE", "FOTO_CIUDADANO"]);
+    const control = resumirDocumentos({ agenda_id: "GENERAL", tipo: { id: "CONTROL_RENOVACION", requiere_carnet: 1, requiere_licencia: 1 } }, ["CARNET_FRENTE", "FOTO_CIUDADANO"]);
     expect(control.requeridos).toHaveLength(4);
     expect(control.listos).toEqual(["CARNET_FRENTE"]);
     expect(control.faltantes).toEqual(["CARNET_REVERSO", "LICENCIA_FRENTE", "LICENCIA_REVERSO"]);
-    expect(resumirDocumentos({ requiere_carnet: 1, requiere_licencia: 0 }, []).faltantes).toEqual(["CARNET_FRENTE", "CARNET_REVERSO"]);
+    expect(resumirDocumentos({ agenda_id: "GENERAL", tipo: { id: "PRIMER_OTORG_NO_PROF", requiere_carnet: 1, requiere_licencia: 0 } }, []).faltantes).toEqual(["CARNET_FRENTE", "CARNET_REVERSO"]);
     expect(resumirDocumentos(null, []).requeridos).toEqual([]);
   });
 

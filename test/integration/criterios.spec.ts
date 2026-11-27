@@ -122,8 +122,9 @@ describe("criterios de aceptación", () => {
   it("4, 12, 13, 17, 18 y 19. Dashboard, catálogo, canje y exportación", async () => {
     const admin = await entrar("ADMIN");
     const tipos = await llamar("/tipos-tramite", { sesion: admin });
-    expect((tipos.json as { tipos: { nombre: string }[] }).tipos).toHaveLength(12);
+    expect((tipos.json as { tipos: { nombre: string }[] }).tipos).toHaveLength(13);
     expect((tipos.json as { tipos: { nombre: string }[] }).tipos.map((t) => t.nombre)).toContain("Primer Otorgamiento Clase B 17");
+    expect((tipos.json as { tipos: { nombre: string }[] }).tipos.map((t) => t.nombre)).toContain("Examen práctico");
     const editado = await llamar("/config/tipos-tramite/DUPLICADO", { method: "PATCH", sesion: admin, body: { nombre: "Duplicado" } });
     expect(editado.status).toBe(200);
     const francesa = await llamar("/citas", {
@@ -236,11 +237,20 @@ describe("criterios de aceptación", () => {
     const despues = await env.DB.prepare("SELECT COUNT(*) AS n FROM correos_log WHERE cita_id = ? AND tipo = 'RECORDATORIO'").bind(citaRecordada).first<{ n: number }>();
     expect(despues?.n).toBe(2);
 
+    await abrir("GENERAL", fecha, "08:30", 2, 4);
     await abrir("PRIMERA_VEZ", fecha, "08:30", 2, 4);
     const pv = await entrar("OPERADOR_AGENDA");
-    const citaPv = await llamar("/citas", {
+    const otorga = await llamar("/citas", {
       method: "POST", sesion: pv,
       body: { tipoTramiteId: "PRIMER_OTORG_NO_PROF", fecha, hora: "08:30", canal: "PRESENCIAL", clases: ["B"], ciudadano: persona(25000010) },
+    });
+    expect(otorga.status).toBe(201);
+    const idOtorga = (otorga.json as { cita: { id: string } }).cita.id;
+    expect((await llamar(`/citas/${idOtorga}/asistencia`, { method: "POST", sesion: admin, body: { estado: "ASISTIO" } })).status).toBe(200);
+    expect((await llamar(`/citas/${idOtorga}/atencion`, { method: "POST", sesion: admin })).status).toBe(200);
+    const citaPv = await llamar("/citas", {
+      method: "POST", sesion: pv,
+      body: { tipoTramiteId: "EXAMEN_PRACTICO", fecha, hora: "08:30", canal: "PRESENCIAL", clases: ["B"], ciudadano: persona(25000010) },
     });
     expect(citaPv.status).toBe(201);
     const ausencia = await llamar("/config/examinadores/ausencia", { method: "POST", sesion: admin, body: { fecha, motivo: "Licencia médica de prueba" } });

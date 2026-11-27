@@ -1,4 +1,4 @@
-import { documentosRequeridos, type TipoTramite } from "../domain/catalogo";
+import { documentosRequeridos, type EntradaDocumentos } from "../domain/catalogo";
 
 export interface Mensaje {
   citaId: string | null;
@@ -79,11 +79,10 @@ export async function armarCorreo(
   };
 }
 
-export function textoDocumentos(tipo: Pick<TipoTramite, "requiere_carnet" | "requiere_licencia">): string {
-  const docs = documentosRequeridos(tipo);
-  if (docs.length === 0) return "cédula de identidad";
+export function textoDocumentos(cita: EntradaDocumentos): string {
+  const docs = documentosRequeridos(cita);
   const partes: string[] = [];
-  if (tipo.requiere_carnet) partes.push("cédula de identidad");
-  if (tipo.requiere_licencia) partes.push("licencia anterior");
+  if (docs.some((doc) => doc.startsWith("CARNET_"))) partes.push("cédula de identidad");
+  if (docs.some((doc) => doc.startsWith("LICENCIA_"))) partes.push("licencia anterior");
   return partes.join(" y ");
 }

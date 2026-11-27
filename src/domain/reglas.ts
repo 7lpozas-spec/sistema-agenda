@@ -19,7 +19,7 @@ export function evaluarTipo(input: {
         return {
           codigo: "REDIRIGIR_PRIMERA_VEZ",
           tipoSugerido: "PRIMER_OTORG_NO_PROF",
-          mensaje: `El canje publicado aplica a ${permitidas.join(" y ") || "las nacionalidades configuradas"}. Otra nacionalidad se tramita como primer otorgamiento, con hora, en la Agenda Primera Vez.`,
+          mensaje: `El canje publicado aplica a ${permitidas.join(" y ") || "las nacionalidades configuradas"}. Otra nacionalidad se tramita como primer otorgamiento, con hora, en la Agenda General.`,
         };
       }
     }
@@ -33,7 +33,7 @@ export function evaluarTipo(input: {
     return {
       codigo: "REDIRIGIR_PRIMERA_VEZ",
       tipoSugerido: "PRIMER_OTORG_NO_PROF",
-      mensaje: "Una licencia obtenida antes del 07-02-1984 se tramita como primer otorgamiento, en la Agenda Primera Vez.",
+      mensaje: "Una licencia obtenida antes del 07-02-1984 se tramita como primer otorgamiento, en la Agenda General.",
     };
   }
   return null;

@@ -38,6 +38,7 @@ await applyD1Migrations(env.DB, [
     `INSERT INTO parametros (clave, valor, descripcion) VALUES ('gracia_cierre_minutos', '30', 'Minutos después del fin del último bloque para marcar inasistencias.') ON CONFLICT(clave) DO NOTHING`,
   ] },
   { name: "0012_atencion_meson.sql", queries: dividirSql(enlace.MIGRATION_MESON ?? "") },
+  { name: "0013_examen_practico.sql", queries: dividirSql(enlace.MIGRATION_EXAMEN ?? "") },
 ]);
 
 const TABLAS = [

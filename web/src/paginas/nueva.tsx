@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { documentosRequeridos } from "../../../src/domain/catalogo";
 import { bloquePosterior } from "../../../src/domain/tiempo";
 import { api, fechaHoy } from "../api";
 import { useAuth } from "../auth";
@@ -31,7 +32,7 @@ export function NuevaCita() {
   const [fecha, setFecha] = useState(params.get("fecha") || fechaHoy());
   const [hora, setHora] = useState(params.get("hora") || "");
   const [bloques, setBloques] = useState<Bloque[]>([]);
-  const [rut, setRut] = useState("");
+  const [rut, setRut] = useState(() => mascaraRut(params.get("rut") ?? ""));
   const [nombres, setNombres] = useState("");
   const [apellidos, setApellidos] = useState("");
   const [email, setEmail] = useState("");
@@ -56,6 +57,12 @@ export function NuevaCita() {
   const [cargandoHoras, setCargandoHoras] = useState(false);
   const [errorHoras, setErrorHoras] = useState("");
   const [revisionHoras, setRevisionHoras] = useState(0);
+  const [examen, setExamen] = useState<{
+    habilitado: boolean;
+    codigo?: string;
+    mensaje?: string;
+    examenActivo?: { id: string; fecha: string; hora: string };
+  } | null>(null);
 
   async function buscarPersona() {
     const normalizado = normalizarRut(rut);
@@ -79,10 +86,36 @@ export function NuevaCita() {
         } | null;
         citasActivas: { id: string; fecha: string; hora: string }[];
         alertaInasistencias: boolean;
+        examen?: {
+          habilitado: boolean;
+          codigo?: string;
+          mensaje?: string;
+          examenActivo?: { id: string; fecha: string; hora: string };
+          clases?: string[];
+        };
       }>(`/api/ciudadanos?rut=${encodeURIComponent(normalizado)}`);
       if (numero !== consultaRut.current) return;
       setRut(normalizado);
       setActivas(datos.citasActivas);
+      const modoExamen = params.get("agenda") === "primera_vez";
+      if (modoExamen) {
+        const estado = datos.examen ?? { habilitado: false, mensaje: "No está habilitado para el examen práctico." };
+        setExamen(estado);
+        if (datos.ciudadano) {
+          const c = datos.ciudadano;
+          setNombres(c.nombres);
+          setApellidos(c.apellidos);
+          setEmail(c.email ?? "");
+          setSinCorreo(c.sin_correo === 1);
+          setTelefono(c.telefono ?? "");
+          setNacimiento(c.fecha_nacimiento ?? "");
+          if (estado.clases?.length) setClases(estado.clases);
+        }
+        setAvisoPersona("");
+        setError(estado.habilitado ? "" : (estado.mensaje ?? "No está habilitado para el examen práctico."));
+        return;
+      }
+      setExamen(null);
       if (datos.ciudadano) {
         const c = datos.ciudadano;
         setNombres(c.nombres);
@@ -121,7 +154,7 @@ export function NuevaCita() {
         const pedida = params.get("agenda");
         const preferido = propios.find((item) =>
           pedida === "primera_vez"
-            ? item.agenda_id === "PRIMERA_VEZ"
+            ? item.id === "EXAMEN_PRACTICO" || item.agenda_id === "PRIMERA_VEZ"
             : pedida === "general"
               ? item.id === "CONTROL_RENOVACION"
               : item.requiere_agenda === 1,
@@ -137,6 +170,12 @@ export function NuevaCita() {
         ),
       );
   }, [params, usuario?.rol]);
+
+  useEffect(() => {
+    if (params.get("rut") && normalizarRut(params.get("rut") ?? "")) void buscarPersona();
+    // Solo al abrir con un RUT ya indicado (ficha o cola de pendientes).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const controlador = new AbortController();
@@ -260,9 +299,9 @@ export function NuevaCita() {
           {avisoPersona.includes("inasistencias") ? (
             <Aviso tono="info">{avisoPersona}</Aviso>
           ) : null}
-          {tipo?.requiere_carnet || tipo?.requiere_licencia ? (
+          {tipo && documentosRequeridos({ agenda_id: tipo.agenda_id, tipo_tramite_id: tipo.id, requiere_carnet: tipo.requiere_carnet, requiere_licencia: tipo.requiere_licencia }).length > 0 ? (
             <p className="flex items-center gap-2 text-sm font-semibold text-[#9a5b00]">
-              <Docs cargados={0} requeridos={(tipo.requiere_carnet ? 2 : 0) + (tipo.requiere_licencia ? 2 : 0)} />
+              <Docs cargados={0} requeridos={documentosRequeridos({ agenda_id: tipo.agenda_id, tipo_tramite_id: tipo.id, requiere_carnet: tipo.requiere_carnet, requiere_licencia: tipo.requiere_licencia }).length} />
               Documentos pendientes
             </p>
           ) : (
@@ -275,7 +314,7 @@ export function NuevaCita() {
             className="btn bg-pine text-white hover:bg-pine-dark"
             to={`/citas/${creada}`}
           >
-            {tipo?.requiere_carnet || tipo?.requiere_licencia ? "Fotografiar documentos" : "Abrir"}
+            {tipo && documentosRequeridos({ agenda_id: tipo.agenda_id, tipo_tramite_id: tipo.id, requiere_carnet: tipo.requiere_carnet, requiere_licencia: tipo.requiere_licencia }).length > 0 ? "Fotografiar documentos" : "Abrir"}
           </Link>
         </section>
       </div>
@@ -289,7 +328,7 @@ export function NuevaCita() {
         className="superficie booking-form mx-auto grid w-full max-w-2xl gap-4 p-4 sm:p-6"
       >
         <div className="flex items-start justify-between gap-3">
-          <h1 className="page-title">Nueva cita</h1>
+          <h1 className="page-title">{params.get("agenda") === "primera_vez" ? "Examen práctico" : "Nueva cita"}</h1>
           <Link
             className="rounded-full px-3 py-1.5 text-sm text-muted hover:bg-paper hover:text-ink"
             to={volver}
@@ -325,6 +364,8 @@ export function NuevaCita() {
                     setBuscando(false);
                     setRut(mascaraRut(e.target.value));
                     setAvisoPersona("");
+                    setExamen(null);
+                    setError("");
                     setActivas([]);
                     setNombres("");
                     setApellidos("");
@@ -362,6 +403,16 @@ export function NuevaCita() {
           ))}
         </fieldset>
         {error ? <Aviso>{error}</Aviso> : null}
+        {params.get("agenda") === "primera_vez" && examen?.examenActivo ? (
+          <Link className="text-sm font-semibold text-sky underline" to={`/citas/${examen.examenActivo.id}`}>
+            Examen práctico {examen.examenActivo.fecha} {examen.examenActivo.hora}
+          </Link>
+        ) : null}
+        {params.get("agenda") === "primera_vez" && examen?.habilitado ? (
+          <p className="text-base font-semibold">{nombres} {apellidos}</p>
+        ) : null}
+        {params.get("agenda") !== "primera_vez" ? (
+        <>
         <h2 className="form-section-title">
           <span aria-hidden>02</span> Trámite y horario
         </h2>
@@ -398,6 +449,12 @@ export function NuevaCita() {
             />
           </Campo>
         ) : null}
+        </>
+        ) : (
+          <h2 className="form-section-title">Horario</h2>
+        )}
+        {params.get("agenda") === "primera_vez" && !examen?.habilitado ? null : (
+        <>
         {errorHoras ? (
           <Aviso>
             {errorHoras}{" "}
@@ -451,6 +508,10 @@ export function NuevaCita() {
               ))}
           </div>
         </fieldset>
+        </>
+        )}
+        {params.get("agenda") !== "primera_vez" ? (
+        <>
         <h2 className="form-section-title">
           <span aria-hidden>03</span> Datos de contacto
         </h2>
@@ -528,6 +589,8 @@ export function NuevaCita() {
           />
           Domicilio en Recoleta
         </label>
+        </>
+        ) : null}
         <button
           type="submit"
           disabled={
@@ -536,7 +599,8 @@ export function NuevaCita() {
             cargandoHoras ||
             Boolean(errorHoras) ||
             !tipo?.requiere_agenda ||
-            !hora
+            !hora ||
+            (params.get("agenda") === "primera_vez" && !examen?.habilitado)
           }
           className="btn bg-sky text-white"
           aria-busy={guardando}

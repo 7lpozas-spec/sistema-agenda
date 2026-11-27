@@ -187,6 +187,92 @@ try {
   await page.screenshot({ path: `${salida}/16-foto-en-pc.png`, fullPage: false });
   await cel.close();
 
+  const primera = await page.evaluate(async () => {
+    const csrf = decodeURIComponent((document.cookie.split("; ").find((item) => item.startsWith("lic_csrf=")) ?? "").slice(9));
+    function digito(cuerpo) {
+      let suma = 0;
+      let multiplicador = 2;
+      for (let i = cuerpo.length - 1; i >= 0; i -= 1) {
+        suma += Number(cuerpo[i]) * multiplicador;
+        multiplicador = multiplicador === 7 ? 2 : multiplicador + 1;
+      }
+      const resto = 11 - (suma % 11);
+      if (resto === 11) return "0";
+      if (resto === 10) return "K";
+      return String(resto);
+    }
+    const cuerpo = String(33000000 + (Date.now() % 1000000));
+    const rut = `${cuerpo}-${digito(cuerpo)}`;
+    let ultimo = "";
+    for (let dia = 3; dia < 40; dia += 1) {
+      const fecha = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Santiago", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Date.now() + dia * 86400000));
+      for (const hora of ["10:30", "11:30", "12:30"]) {
+        const respuesta = await fetch("/api/citas", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-csrf-token": csrf },
+          body: JSON.stringify({
+            tipoTramiteId: "PRIMER_OTORG_NO_PROF",
+            fecha,
+            hora,
+            canal: "PRESENCIAL",
+            ciudadano: { rut, nombres: "Prima", apellidos: "Ficticia", email: "prima.ficticia@ejemplo.cl" },
+          }),
+        });
+        if (respuesta.status === 201) {
+          const creado = await respuesta.json();
+          return { ...creado, rut };
+        }
+        ultimo = `${respuesta.status} ${await respuesta.text()}`;
+      }
+    }
+    return { error: ultimo };
+  });
+  assert.ok(primera?.cita?.id, `no hubo cupo para primer otorgamiento: ${primera?.error ?? ""}`);
+  await page.goto(`${base}/citas/${primera.cita.id}`);
+  await page.getByRole("heading", { level: 1 }).waitFor();
+  assert.equal(await page.getByText("Docs 0/2").count() > 0, true);
+  assert.equal(await page.getByRole("button", { name: "Fotografiar Licencia, frente" }).count(), 0);
+  const rechazo = await page.evaluate(async (id) => {
+    const csrf = decodeURIComponent((document.cookie.split("; ").find((item) => item.startsWith("lic_csrf=")) ?? "").slice(9));
+    const r = await fetch(`/api/citas/${id}/foto?tipo=LICENCIA_FRENTE`, {
+      method: "POST",
+      headers: { "content-type": "image/jpeg", "x-csrf-token": csrf },
+      body: new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], { type: "image/jpeg" }),
+    });
+    return { status: r.status, cuerpo: await r.text() };
+  }, primera.cita.id);
+  assert.equal(rechazo.status, 422);
+  const jpegPrima = Buffer.from((await page.evaluate(() => {
+    const lienzo = document.createElement("canvas");
+    lienzo.width = 200;
+    lienzo.height = 126;
+    const ctx = lienzo.getContext("2d");
+    ctx.fillStyle = "#dfe8f5";
+    ctx.fillRect(0, 0, 200, 126);
+    return lienzo.toDataURL("image/jpeg", 0.8);
+  })).split(",")[1], "base64");
+  for (const doc of ["Carnet, frente", "Carnet, reverso"]) {
+    await page.getByRole("button", { name: `Fotografiar ${doc}` }).click();
+    await page.getByLabel("Subir archivo").setInputFiles({ name: "doc.jpg", mimeType: "image/jpeg", buffer: jpegPrima });
+    await page.getByRole("img", { name: doc }).waitFor();
+  }
+  await page.getByRole("link", { name: "Emitir comprobante" }).waitFor();
+  const pdfPrima = await page.evaluate(async (id) => (await fetch(`/api/citas/${id}/comprobante.pdf`, { credentials: "same-origin" })).status, primera.cita.id);
+  assert.equal(pdfPrima, 200);
+  await page.evaluate(async (id) => {
+    const csrf = decodeURIComponent((document.cookie.split("; ").find((item) => item.startsWith("lic_csrf=")) ?? "").slice(9));
+    const headers = { "content-type": "application/json", "x-csrf-token": csrf };
+    const a = await fetch(`/api/citas/${id}/asistencia`, { method: "POST", headers, body: JSON.stringify({ estado: "ASISTIO" }) });
+    if (!a.ok) throw new Error(`asistencia ${a.status}`);
+    const b = await fetch(`/api/citas/${id}/atencion`, { method: "POST", headers, body: "{}" });
+    if (!b.ok) throw new Error(`atencion ${b.status}`);
+  }, primera.cita.id);
+  await page.goto(`${base}/agenda/primera_vez`);
+  await page.getByRole("heading", { name: "Agenda primera vez" }).waitFor();
+  await page.getByRole("heading", { name: "Pendientes de agendar examen" }).waitFor();
+  await page.getByText("Ficticia, Prima").waitFor();
+  await page.screenshot({ path: `${salida}/17-pendientes-examen.png`, fullPage: true });
+
   await page.getByRole("button", { name: "Salir" }).click();
   await page.getByRole("heading", { name: "Ingreso" }).waitFor();
   await entrar(page, "instructor@ejemplo.cl", clave("LICENCIAS_CLAVE_INSTRUCTOR"));

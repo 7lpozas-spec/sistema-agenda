@@ -1,6 +1,8 @@
 import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import {
+  cantidadDocumentosRequeridos,
+  documentosAPresentar,
   documentosRequeridos,
   esAgenda,
   esRol,
@@ -11,6 +13,7 @@ import {
   type TipoDocumento,
   type TipoTramite,
 } from "./domain/catalogo";
+import { MENSAJE_EXAMEN } from "./domain/examen";
 import { enmascararRut, formatearRut, normalizarRut } from "./domain/rut";
 import { bloquesDeTipo } from "./servicios/reservas";
 import { evaluarTipo } from "./domain/reglas";
@@ -30,6 +33,7 @@ import { armarEstadisticas, filtroDe, listadoCitas, type Estadisticas, type Filt
 import { cerrarJornadasAutomaticas, citasDelCierre, confirmarCierre, marcarInasistenciasVencidas, proponerTrasCierre } from "./servicios/jornada";
 import { armarPanel } from "./servicios/panel";
 import { bytesDeBlob, comprobanteDisponible, estadoDocumentos, NOMBRE_DOCUMENTO } from "./servicios/documentos";
+import { estadoExamenPractico, listarPendientesExamen } from "./servicios/examen";
 import { buscarPersona, cambiarEstadoAtencion, cerrarMesonPendiente, crearServicio, editarServicio, esEstadoMeson, listarDia, listarServicios, numeroTexto, registrarAtencion, resumenMeson } from "./servicios/meson";
 import { libroXlsx, reportePdf } from "./exportar/documentos";
 import { comprobantePdf } from "./exportar/comprobante";
@@ -268,11 +272,11 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
         "SELECT hora, capacidad, usados FROM cupos_bloque WHERE agenda_id = ? AND fecha = ? ORDER BY hora",
       ).bind(agenda, fecha).all<{ hora: string; capacidad: number; usados: number }>(),
       c.env.DB.prepare(
-        `SELECT c.id, c.hora, c.estado, c.es_sobrecupo, c.docs_cargados, (t.requiere_carnet + t.requiere_licencia) * 2 AS docs_requeridos, t.nombre AS tramite,
+        `SELECT c.id, c.hora, c.estado, c.es_sobrecupo, c.docs_cargados, c.tipo_tramite_id, t.requiere_carnet, t.requiere_licencia, t.nombre AS tramite,
                 ci.rut, ci.nombres, ci.apellidos
          FROM citas c JOIN ciudadanos ci ON ci.id = c.ciudadano_id JOIN tipos_tramite t ON t.id = c.tipo_tramite_id
          WHERE c.agenda_id = ? AND c.fecha = ? AND c.estado NOT IN ('CANCELADA', 'ANULADA') ORDER BY c.hora`,
-      ).bind(agenda, fecha).all<{ rut: string; nombres: string; apellidos: string; hora: string; estado: string; es_sobrecupo: number; docs_cargados: number; docs_requeridos: number; tramite: string; id: string }>(),
+      ).bind(agenda, fecha).all<{ rut: string; nombres: string; apellidos: string; hora: string; estado: string; es_sobrecupo: number; docs_cargados: number; tipo_tramite_id: string; requiere_carnet: number; requiere_licencia: number; tramite: string; id: string }>(),
       c.env.DB.prepare("SELECT capacidad, usados FROM cupos_dia WHERE agenda_id = ? AND fecha = ?").bind(agenda, fecha).first<{ capacidad: number; usados: number }>(),
       c.env.DB.prepare("SELECT 1 AS n FROM feriados WHERE fecha = ?").bind(fecha).first(),
       c.env.DB.prepare("SELECT 1 AS n FROM excepciones_dia WHERE agenda_id = ? AND fecha = ? AND tipo = 'BLOQUEO'").bind(agenda, fecha).first(),
@@ -289,7 +293,12 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
       bloques: conMarca,
       libres: diaAbierto ? Math.min(libresBloque, libresDia) : 0,
       laborables,
-      citas: citas.results.map((cita) => ({ ...cita, rut: enmascararRut(cita.rut), nombre: `${cita.apellidos}, ${cita.nombres}` })),
+      citas: citas.results.map(({ tipo_tramite_id, requiere_carnet, requiere_licencia, ...cita }) => ({
+        ...cita,
+        docs_requeridos: cantidadDocumentosRequeridos({ agenda_id: agenda, tipo_tramite_id, requiere_carnet, requiere_licencia }),
+        rut: enmascararRut(cita.rut),
+        nombre: `${cita.apellidos}, ${cita.nombres}`,
+      })),
     });
   });
 
@@ -305,7 +314,24 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
         .bind((ciudadano as { id: string }).id).all()
       : { results: [] };
     const inasistencias = ciudadano ? await contarInasistencias(c.env.DB, (ciudadano as { id: string }).id) : 0;
-    return c.json({ ciudadano, citasActivas: citas.results, alertaInasistencias: inasistencias >= 2 });
+    const examen = ciudadano
+      ? await estadoExamenPractico(c.env.DB, (ciudadano as { id: string }).id)
+      : { habilitado: false, codigo: "NO_HABILITADO" as const, mensaje: MENSAJE_EXAMEN.NO_HABILITADO, intentos: [], clases: ["B"] as string[] };
+    return c.json({ ciudadano, citasActivas: citas.results, alertaInasistencias: inasistencias >= 2, examen });
+  });
+
+  api.get("/examen/pendientes", async (c) => {
+    if (!puedeVerAgenda(c.get("usuario").rol, "PRIMERA_VEZ")) {
+      throw new ErrorApp(403, "SIN_PERMISO", "Su rol no puede ver esa agenda.");
+    }
+    const pendientes = await listarPendientesExamen(c.env.DB);
+    return c.json({
+      pendientes: pendientes.map((fila) => ({
+        ...fila,
+        rut: c.get("usuario").rol === "RECEPCION" ? enmascararRut(fila.rut) : fila.rut,
+        rutVisible: enmascararRut(fila.rut),
+      })),
+    });
   });
 
   api.post("/citas", async (c) => {
@@ -333,6 +359,18 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     const hora = texto(cuerpo.hora, "La hora", 5, 5);
     if (!fechaValida(fecha) || !/^\d{2}:\d{2}$/.test(hora)) throw new ErrorApp(400, "DATO_INVALIDO", "La fecha o la hora no es válida.");
     await validarVentana(c.env.DB, tipo.agenda_id, fecha, hora);
+    if (tipo.agenda_id === "PRIMERA_VEZ") {
+      const datos = esObjeto(cuerpo.ciudadano) ? cuerpo.ciudadano : cuerpo;
+      const rutExamen = normalizarRut(typeof datos.rut === "string" ? datos.rut : "");
+      const existente = rutExamen
+        ? await c.env.DB.prepare("SELECT id FROM ciudadanos WHERE rut = ?").bind(rutExamen).first<{ id: string }>()
+        : null;
+      if (!existente) throw new ErrorApp(422, "NO_HABILITADO", MENSAJE_EXAMEN.NO_HABILITADO);
+      const examen = await estadoExamenPractico(c.env.DB, existente.id);
+      if (!examen.habilitado) {
+        throw new ErrorApp(422, examen.codigo ?? "NO_HABILITADO", examen.mensaje ?? MENSAJE_EXAMEN.NO_HABILITADO);
+      }
+    }
     const ciudadano = await guardarCiudadano(c.env.DB, cuerpo);
     const forzar = usuario.rol === "ADMIN" && cuerpo.forzarDuplicado === true;
     const activa = await c.env.DB.prepare("SELECT id, fecha, hora FROM citas WHERE ciudadano_id = ? AND agenda_id = ? AND estado = 'AGENDADA'")
@@ -367,7 +405,7 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
         cuerpo.declaraDomicilioRecoleta === true ? 1 : 0,
         typeof cuerpo.licenciaObtenidaEl === "string" ? cuerpo.licenciaObtenidaEl : null,
         typeof cuerpo.nacionalidad === "string" ? cuerpo.nacionalidad : null,
-        observaciones, documentosRequeridos(tipo).length, usuario.id, ahora, ahora,
+        observaciones, documentosRequeridos({ agenda_id: tipo.agenda_id, tipo }).length, usuario.id, ahora, ahora,
       ).run();
     } catch (error) {
       await candado(c.env, tipo.agenda_id).liberar({ agendaId: tipo.agenda_id, fecha, hora, cantidad: tipo.cupos_que_consume, bloques, duracionBloque: agenda?.duracion_bloque_min ?? 15, sobrecupo });
@@ -412,14 +450,16 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     const documentos = await c.env.DB.prepare(
       "SELECT id, tipo, bytes, mime, subido_at, vigente, pagina, CASE WHEN drive_file_id <> id THEN 1 ELSE 0 END AS en_drive FROM documentos WHERE cita_id = ? ORDER BY subido_at",
     ).bind(cita.id).all<{ tipo: string; vigente: number }>();
-    const docs = await estadoDocumentos(c.env.DB, cita.id, tipo);
+    const docs = await estadoDocumentos(c.env.DB, cita.id, { agenda_id: cita.agenda_id, tipo });
+    const examen = await estadoExamenPractico(c.env.DB, cita.ciudadano_id);
     return c.json({
       cita: {
         ...cita,
         rutVisible: formatearRut(cita.rut),
-        documentosTexto: tipo ? textoDocumentos(tipo) : "cédula de identidad",
+        documentosTexto: tipo ? textoDocumentos({ agenda_id: cita.agenda_id, tipo }) : "",
         direccion,
       },
+      examen,
       requeridos: docs.requeridos,
       faltantes: docs.faltantes,
       comprobante: comprobanteDisponible(cita.estado, docs.faltantes),
@@ -511,7 +551,7 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     const q = limpiarLinea(c.req.query("q") ?? "");
     const rut = normalizarRut(q);
     const filas = await c.env.DB.prepare(
-      `SELECT c.id, c.hora, c.agenda_id, c.estado, c.es_sobrecupo, c.docs_cargados, (t.requiere_carnet + t.requiere_licencia) * 2 AS docs_requeridos, c.atencion_at, c.asistencia_at,
+      `SELECT c.id, c.hora, c.agenda_id, c.estado, c.es_sobrecupo, c.docs_cargados, c.tipo_tramite_id, t.requiere_carnet, t.requiere_licencia, c.atencion_at, c.asistencia_at,
               t.nombre AS tramite, ci.rut, ci.nombres, ci.apellidos
        FROM citas c JOIN ciudadanos ci ON ci.id = c.ciudadano_id JOIN tipos_tramite t ON t.id = c.tipo_tramite_id
        WHERE c.fecha = ? AND c.estado NOT IN ('CANCELADA', 'ANULADA')
@@ -519,11 +559,16 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
          AND (? = '' OR ci.rut = ? OR ci.apellidos LIKE ? OR ci.nombres LIKE ? OR upper(substr(c.id, 1, 8)) = upper(?))
        ORDER BY c.hora, c.agenda_id`,
     ).bind(fecha, agendaFiltro, agendaFiltro, q, rut ?? "", `%${q.replace(/[\\%_]/g, (s) => `\\${s}`)}%`, `%${q.replace(/[\\%_]/g, (s) => `\\${s}`)}%`, q).all<{
-      id: string; hora: string; agenda_id: string; estado: string; es_sobrecupo: number; docs_cargados: number; docs_requeridos: number; tramite: string; rut: string; nombres: string; apellidos: string;
+      id: string; hora: string; agenda_id: string; estado: string; es_sobrecupo: number; docs_cargados: number; tipo_tramite_id: string; requiere_carnet: number; requiere_licencia: number; tramite: string; rut: string; nombres: string; apellidos: string;
     }>();
     return c.json({
       fecha,
-      citas: filas.results.map((cita) => ({ ...cita, rut: enmascararRut(cita.rut), nombre: `${cita.apellidos}, ${cita.nombres}` })),
+      citas: filas.results.map(({ tipo_tramite_id, requiere_carnet, requiere_licencia, ...cita }) => ({
+        ...cita,
+        docs_requeridos: cantidadDocumentosRequeridos({ agenda_id: cita.agenda_id, tipo_tramite_id, requiere_carnet, requiere_licencia }),
+        rut: enmascararRut(cita.rut),
+        nombre: `${cita.apellidos}, ${cita.nombres}`,
+      })),
       contadores: {
         total: filas.results.length,
         confirmadas: filas.results.filter((cita) => cita.estado === "ASISTIO" || cita.estado === "ATRASADO").length,
@@ -1149,7 +1194,7 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     const hoy = partesEnZona(new Date(), "America/Santiago").fecha;
     if (usuario.rol === "RECEPCION" && cita.fecha !== hoy) throw new ErrorApp(403, "SIN_PERMISO", "Recepción solo ve las citas de hoy.");
     const tipo = await tipoPorId(c.env.DB, cita.tipo_tramite_id);
-    const docs = await estadoDocumentos(c.env.DB, cita.id, tipo);
+    const docs = await estadoDocumentos(c.env.DB, cita.id, { agenda_id: cita.agenda_id, tipo });
     if (!comprobanteDisponible(cita.estado, docs.faltantes)) {
       throw new ErrorApp(409, "DOCUMENTOS_PENDIENTES", `Faltan documentos: ${docs.faltantes.map((doc) => NOMBRE_DOCUMENTO[doc] ?? doc).join(", ")}.`);
     }
@@ -1165,12 +1210,7 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     } catch {
       clases = [];
     }
-    const documentos = tipo
-      ? [
-        ...(tipo.requiere_carnet ? ["Cédula de identidad vigente"] : []),
-        ...(tipo.requiere_licencia ? ["Licencia de conducir anterior"] : []),
-      ]
-      : [];
+    const documentos = documentosAPresentar({ agenda_id: cita.agenda_id, tipo });
     const pdf = comprobantePdf({
       folio: cita.id.slice(0, 8).toUpperCase(),
       estado: cita.estado,
@@ -1186,7 +1226,7 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
       hora: cita.hora,
       duracionMin: tipo?.duracion_slot_min ?? extra?.duracion_bloque_min ?? 15,
       direccion,
-      documentos: documentos.length ? documentos : ["Cédula de identidad vigente"],
+      documentos,
       registradoPor: extra?.registrado_por ?? "Sin registro",
       registradoAt: extra?.creado_at ?? "",
       emitidoAt: new Date(),
@@ -1215,9 +1255,13 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     if (cita.agenda_id !== "PRIMERA_VEZ") throw new ErrorApp(409, "ESTADO_INVALIDO", "El resultado corresponde al examen de primera vez.");
     const cuerpo = await leerJson(c.req.raw);
     const resultado = texto(cuerpo.resultado, "El resultado", 8, 10);
-    if (resultado !== "APROBADO" && resultado !== "REPROBADO") throw new ErrorApp(400, "DATO_INVALIDO", "El resultado debe ser aprobado o reprobado.");
-    await c.env.DB.prepare("UPDATE citas SET resultado = ?, actualizado_at = ?, actualizado_por = ? WHERE id = ?")
-      .bind(resultado, new Date().toISOString(), usuario.id, cita.id).run();
+    if (resultado !== "APROBADO" && resultado !== "REPROBADO" && resultado !== "NO_ASISTIO") {
+      throw new ErrorApp(400, "DATO_INVALIDO", "El resultado debe ser aprobado, reprobado o no asistió.");
+    }
+    const ahora = new Date().toISOString();
+    const estado = resultado === "NO_ASISTIO" ? "NO_ASISTIO" : cita.estado === "AGENDADA" ? "ASISTIO" : cita.estado;
+    await c.env.DB.prepare("UPDATE citas SET resultado = ?, estado = ?, actualizado_at = ?, actualizado_por = ? WHERE id = ?")
+      .bind(resultado, estado, ahora, usuario.id, cita.id).run();
     await auditar(c.env.DB, { usuarioId: usuario.id, accion: "resultado", entidad: "cita", entidadId: cita.id, despues: { resultado }, ip: ipDe(c.req.raw) });
     await avisarOficina(c.env, { tipo: "cita", citaId: cita.id });
     return c.json({ ok: true, resultado });
@@ -1310,7 +1354,7 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
       ).bind(
         id, tipo.agenda_id, ciudadano.id, tipo.id, JSON.stringify(["B"]), fecha, hora,
         "PRESENCIAL",
-        documentosRequeridos(tipo).length, usuario.id, ahora, ahora,
+        documentosRequeridos({ agenda_id: tipo.agenda_id, tipo }).length, usuario.id, ahora, ahora,
       ).run();
     } catch (error) {
       await candado(c.env, tipo.agenda_id).liberar({
@@ -1344,7 +1388,10 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
     const mime = detectarImagen(bytes) ?? (bytes[0] === 0xff && bytes[1] === 0xd8 ? "image/jpeg" : null);
     if (!mime) throw new ErrorApp(400, "FOTO_INVALIDA", "La fotografía debe ser JPEG, PNG o WebP.");
     const tipo = await tipoPorId(c.env.DB, cita.tipo_tramite_id);
-    const requeridos = tipo ? documentosRequeridos(tipo) : [];
+    const requeridos = documentosRequeridos({ agenda_id: cita.agenda_id, tipo });
+    if (["CARNET_FRENTE", "CARNET_REVERSO", "LICENCIA_FRENTE", "LICENCIA_REVERSO"].includes(tipoDoc) && !requeridos.includes(tipoDoc as TipoDocumento)) {
+      throw new ErrorApp(422, "DOCUMENTO_NO_APLICA", "Ese documento no corresponde a este trámite.");
+    }
     const ahora = new Date();
     const local = partesEnZona(ahora, "America/Santiago");
     const carpetas = [cita.fecha, `${formatearRut(cita.rut)} ${cita.apellidos} ${cita.nombres}`.trim()];
@@ -1383,7 +1430,7 @@ export function createApp(): Hono<{ Bindings: Env; Variables: Variables }> {
       sentencias.push(c.env.DB.prepare("INSERT INTO cola_drive (id, documento_id, intentos, ultimo_error, creado_at) VALUES (?, ?, 0, NULL, ?)").bind(crypto.randomUUID(), id, ahora.toISOString()));
     }
     await c.env.DB.batch(sentencias);
-    const docs = await estadoDocumentos(c.env.DB, cita.id, tipo);
+    const docs = await estadoDocumentos(c.env.DB, cita.id, { agenda_id: cita.agenda_id, tipo });
     await auditar(c.env.DB, { usuarioId: usuario.id, accion: "doc_subido", entidad: "documento", entidadId: id, despues: { tipo: tipoDoc, ruta, drive: Boolean(driveId) }, ip: ipDe(c.req.raw) });
     await avisarOficina(c.env, { tipo: "foto", citaId: cita.id, agendaId: cita.agenda_id, documentoId: id });
     return c.json({
@@ -1620,7 +1667,7 @@ async function guardarCiudadano(db: D1Database, cuerpo: Record<string, unknown>)
   ).bind(id, rut, nombres, apellidos, email, sinCorreo ? 1 : 0, telefono, nacimiento, ahora, ahora).run();
   return { id, email, nombres, apellidos, rut };
 }
-async function variablesCorreo(env: Env, persona: { nombres: string; apellidos: string }, tipo: { nombre: string; requiere_carnet: number; requiere_licencia: number }, fecha: string, hora: string) {
+async function variablesCorreo(env: Env, persona: { nombres: string; apellidos: string }, tipo: TipoTramite, fecha: string, hora: string) {
   const direccion = (await env.DB.prepare("SELECT valor FROM parametros WHERE clave = 'direccion_atencion'").first<{ valor: string }>())?.valor ?? "";
   const telefono = (await env.DB.prepare("SELECT valor FROM parametros WHERE clave = 'telefono_consultas'").first<{ valor: string }>())?.valor ?? "";
   return {
@@ -1628,8 +1675,8 @@ async function variablesCorreo(env: Env, persona: { nombres: string; apellidos: 
     fecha: formatearFecha(fecha),
     hora,
     tramite: tipo.nombre,
-    agenda: tipo.nombre.startsWith("Primer") ? "Agenda Primera Vez" : "Agenda General",
-    documentos: textoDocumentos(tipo),
+    agenda: tipo.agenda_id === "PRIMERA_VEZ" ? "Agenda Primera Vez" : "Agenda General",
+    documentos: textoDocumentos({ agenda_id: tipo.agenda_id, tipo }),
     direccion,
     telefono,
     logo_url: "/logo-recoleta.jpg",
@@ -1664,7 +1711,7 @@ export async function tareasProgramadas(env: Env, ahora = new Date()): Promise<v
   await sincronizarDrive(env);
   if (partes.hora !== horaRecordatorio) return;
   const citas = await env.DB.prepare(
-    `SELECT c.id, c.fecha, c.hora, c.agenda_id, t.nombre AS tramite, t.requiere_carnet, t.requiere_licencia,
+    `SELECT c.id, c.fecha, c.hora, c.agenda_id, c.tipo_tramite_id, t.nombre AS tramite, t.requiere_carnet, t.requiere_licencia,
             ci.nombres, ci.apellidos, ci.email
      FROM citas c
      JOIN ciudadanos ci ON ci.id = c.ciudadano_id
@@ -1674,7 +1721,7 @@ export async function tareasProgramadas(env: Env, ahora = new Date()): Promise<v
        AND c.fecha = date(?, '+' || a.recordatorio_dias_antes || ' day')
      LIMIT 8`,
   ).bind(partes.fecha).all<{
-    id: string; fecha: string; hora: string; agenda_id: string; tramite: string;
+    id: string; fecha: string; hora: string; agenda_id: string; tipo_tramite_id: string; tramite: string;
     requiere_carnet: number; requiere_licencia: number; nombres: string; apellidos: string; email: string;
   }>();
   const enviados: string[] = [];

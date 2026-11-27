@@ -1,4 +1,4 @@
-import { documentosRequeridos, type TipoDocumento, type TipoTramite } from "../domain/catalogo";
+import { documentosRequeridos, type EntradaDocumentos, type TipoDocumento } from "../domain/catalogo";
 
 export const NOMBRE_DOCUMENTO: Record<string, string> = {
   CARNET_FRENTE: "Carnet, frente",
@@ -16,8 +16,8 @@ export interface EstadoDocumentos {
   faltantes: TipoDocumento[];
 }
 
-export function resumirDocumentos(tipo: Pick<TipoTramite, "requiere_carnet" | "requiere_licencia"> | null, vigentes: string[]): EstadoDocumentos {
-  const requeridos = tipo ? documentosRequeridos(tipo) : [];
+export function resumirDocumentos(cita: EntradaDocumentos | null, vigentes: string[]): EstadoDocumentos {
+  const requeridos = cita ? documentosRequeridos(cita) : [];
   const hay = new Set(vigentes);
   return {
     requeridos,
@@ -26,9 +26,9 @@ export function resumirDocumentos(tipo: Pick<TipoTramite, "requiere_carnet" | "r
   };
 }
 
-export async function estadoDocumentos(db: D1Database, citaId: string, tipo: Pick<TipoTramite, "requiere_carnet" | "requiere_licencia"> | null): Promise<EstadoDocumentos> {
+export async function estadoDocumentos(db: D1Database, citaId: string, cita: EntradaDocumentos | null): Promise<EstadoDocumentos> {
   const filas = await db.prepare("SELECT DISTINCT tipo FROM documentos WHERE cita_id = ? AND vigente = 1").bind(citaId).all<{ tipo: string }>();
-  return resumirDocumentos(tipo, filas.results.map((fila) => fila.tipo));
+  return resumirDocumentos(cita, filas.results.map((fila) => fila.tipo));
 }
 
 /**

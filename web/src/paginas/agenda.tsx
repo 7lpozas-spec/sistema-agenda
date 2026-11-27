@@ -1,6 +1,8 @@
 import { CalendarDays, Plus, Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
+import { etiquetaIntento } from "../../../src/domain/examen";
+import { mascaraRut, normalizarRut } from "../../../src/domain/rut";
 import { bloquePosterior } from "../../../src/domain/tiempo";
 import { api, fechaHoy, fechaHumana } from "../api";
 import { Fecha, diaSemanaIso, grillaLaborable } from "../fecha";
@@ -78,6 +80,12 @@ export function Agenda() {
   const dialogo = useRef<HTMLDialogElement>(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
+  const [pendientes, setPendientes] = useState<{
+    ciudadanoId: string; rut: string; rutVisible?: string; nombres: string; apellidos: string; nombre: string;
+    otorgamientoFecha: string; ultimoIntento: { id: string; fecha: string; hora: string; estado: string; resultado?: string | null } | null;
+  }[]>([]);
+  const [rutPendiente, setRutPendiente] = useState("");
+  const [hallazgo, setHallazgo] = useState<{ nombre: string; rut: string; mensaje?: string; habilitado: boolean; activo?: { id: string; fecha: string; hora: string } } | null>(null);
   const [revision, setRevision] = useState(0);
   const [consulta, setConsulta] = useState("");
   const [estado, setEstado] = useState("");
@@ -129,6 +137,10 @@ export function Agenda() {
           );
           if (activo) setDias(respuesta);
         }
+        if (agendaId === "PRIMERA_VEZ") {
+          const cola = await api<{ pendientes: typeof pendientes }>(`/api/examen/pendientes`);
+          if (activo) setPendientes(cola.pendientes);
+        } else if (activo) setPendientes([]);
       } catch (falla) {
         if (activo)
           setError(
@@ -193,8 +205,8 @@ export function Agenda() {
   const vuelta = encodeURIComponent(
     `/agenda/${agenda}?fecha=${fecha}&vista=${vista}`,
   );
-  const nueva = (hora = "", dia = fechaReserva) =>
-    `/citas/nueva?agenda=${agenda}&fecha=${dia}&hora=${hora}&volver=${vuelta}`;
+  const nueva = (hora = "", dia = fechaReserva, rut = "") =>
+    `/citas/nueva?agenda=${agenda}&fecha=${dia}&hora=${hora}&volver=${vuelta}${rut ? `&rut=${encodeURIComponent(rut)}` : ""}`;
   const sePuedeReservar = (dia: string, bloque: Bloque) =>
     bloque.reservable ??
     (bloquePosterior(dia, bloque.hora, ahora) && bloque.usados < bloque.capacidad);
@@ -267,6 +279,78 @@ export function Agenda() {
           ))}
         </div>
       </div>
+      {agendaId === "PRIMERA_VEZ" ? (
+        <section className="superficie grid gap-3 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold">Pendientes de agendar examen</h2>
+            <span className="text-xs font-semibold tabular-nums text-muted">{pendientes.length}</span>
+          </div>
+          {puedeReservar ? (
+            <form
+              className="flex flex-wrap items-end gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const normalizado = normalizarRut(rutPendiente);
+                if (!normalizado) {
+                  setHallazgo({ nombre: "", rut: rutPendiente, habilitado: false, mensaje: "Revise el RUT y su dígito verificador." });
+                  return;
+                }
+                void api<{
+                  ciudadano: { nombres: string; apellidos: string; rut?: string } | null;
+                  examen?: { habilitado: boolean; mensaje?: string; examenActivo?: { id: string; fecha: string; hora: string } };
+                }>(`/api/ciudadanos?rut=${encodeURIComponent(normalizado)}`)
+                  .then((datos) => {
+                    const examen = datos.examen;
+                    const nombre = datos.ciudadano ? `${datos.ciudadano.nombres} ${datos.ciudadano.apellidos}` : "";
+                    if (examen?.habilitado && datos.ciudadano) {
+                      setHallazgo({ nombre, rut: normalizado, habilitado: true });
+                    } else if (examen?.examenActivo) {
+                      setHallazgo({ nombre, rut: normalizado, habilitado: false, mensaje: examen.mensaje, activo: examen.examenActivo });
+                    } else {
+                      setHallazgo({ nombre, rut: normalizado, habilitado: false, mensaje: examen?.mensaje ?? "No está habilitado para el examen práctico." });
+                    }
+                  })
+                  .catch((falla: unknown) => setHallazgo({ nombre: "", rut: rutPendiente, habilitado: false, mensaje: falla instanceof Error ? falla.message : "No se pudo consultar el RUT." }));
+              }}
+            >
+              <label className="grid min-w-[12rem] flex-1 gap-1 text-sm font-medium" htmlFor="rut-examen">RUT
+                <input id="rut-examen" className={control} value={rutPendiente} onChange={(e) => { setRutPendiente(mascaraRut(e.target.value)); setHallazgo(null); }} />
+              </label>
+              <button type="submit" className="btn border border-line bg-white">Buscar</button>
+            </form>
+          ) : null}
+          {hallazgo?.mensaje ? <Aviso>{hallazgo.mensaje}</Aviso> : null}
+          {hallazgo?.activo ? (
+            <Link className="text-sm font-semibold text-sky underline" to={`/citas/${hallazgo.activo.id}`}>Examen práctico {hallazgo.activo.fecha} {hallazgo.activo.hora}</Link>
+          ) : null}
+          {hallazgo?.habilitado ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-white px-3 py-2 text-sm">
+              <span className="font-semibold">{hallazgo.nombre}</span>
+              <Link className="btn bg-pine text-white" to={nueva("", fecha, hallazgo.rut)}>Agendar</Link>
+            </div>
+          ) : null}
+          {pendientes.length === 0 ? (
+            <p className="text-sm text-muted">Sin pendientes</p>
+          ) : (
+            <ul className="grid gap-1">
+              {pendientes.map((fila) => (
+                <li key={fila.ciudadanoId} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-white px-3 py-2 text-sm">
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold">{fila.nombre}</p>
+                    <p className="text-xs text-muted tabular-nums">
+                      {fila.rutVisible ?? fila.rut}
+                      {fila.ultimoIntento ? ` · ${etiquetaIntento(fila.ultimoIntento)} ${fila.ultimoIntento.fecha}` : ` · ${fila.otorgamientoFecha}`}
+                    </p>
+                  </div>
+                  {puedeReservar ? (
+                    <Link className="btn bg-pine text-white" to={nueva("", fecha, fila.rut)}>Agendar</Link>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : null}
       {error ? (
         <Aviso>
           {error}{" "}
@@ -585,7 +669,7 @@ export function Agenda() {
                       <div>
                         <dt className="text-muted">Documentos</dt>
                         <dd>
-                          {(elegida.docs_requeridos ?? 0) > 0 ? <Docs cargados={elegida.docs_cargados} requeridos={elegida.docs_requeridos} /> : "No requiere"}
+                          {(elegida.docs_requeridos ?? 0) > 0 ? <Docs cargados={elegida.docs_cargados} requeridos={elegida.docs_requeridos} /> : null}
                         </dd>
                       </div>
                     </dl>

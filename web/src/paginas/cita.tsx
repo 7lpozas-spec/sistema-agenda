@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { api, fechaHumana } from "../api";
 import { textoFecha } from "../fecha";
 import { useAuth } from "../auth";
 import { Camera } from "lucide-react";
 import { Aviso, Docs, Estado, Esqueleto } from "../ui";
 import { useVivo } from "../vivo";
+import { etiquetaIntento, resultadoDeIntento } from "../../../src/domain/examen";
 import { Camara } from "./escaner";
 
 interface Documento { id: string; tipo: string; bytes: number; subido_at: string; vigente: number; pagina: number }
@@ -28,10 +29,19 @@ interface Cita {
   atencion_at?: string | null;
   documentosTexto?: string;
   direccion?: string;
+  tipo_tramite_id?: string;
+}
+interface IntentoExamen { id: string; fecha: string; hora: string; estado: string; resultado?: string | null }
+interface Examen {
+  habilitado: boolean;
+  codigo?: string;
+  mensaje?: string;
+  examenActivo?: { id: string; fecha: string; hora: string };
+  intentos: IntentoExamen[];
 }
 interface Otra { id: string; fecha: string; hora: string; estado: string; tramite: string }
 interface Hueco { fecha: string; hora: string; libres: number }
-interface Ficha { cita: Cita; documentos: Documento[]; otras?: Otra[]; requeridos?: string[]; faltantes?: string[]; comprobante?: boolean }
+interface Ficha { cita: Cita; documentos: Documento[]; otras?: Otra[]; requeridos?: string[]; faltantes?: string[]; comprobante?: boolean; examen?: Examen }
 type Subida = { estado: "subiendo" } | { estado: "error"; mensaje: string; blob: Blob };
 
 const EXTRAS = [
@@ -267,6 +277,15 @@ export function CitaDetalle() {
             <button type="button" className="h-11 rounded-lg border border-line px-4 text-sm font-semibold" onClick={() => void accion("resultado", { resultado: "REPROBADO" }, "No se pudo guardar.")}>Reprobado</button>
           </div>
         ) : null}
+        {puedeMover && ficha.examen?.habilitado && cita.agenda_id === "GENERAL" ? (
+          <Link className="btn bg-pine text-white" to={`/citas/nueva?agenda=primera_vez&rut=${encodeURIComponent(cita.rut)}&volver=/agenda/primera_vez`}>Agendar examen práctico</Link>
+        ) : null}
+        {puedeMover && ficha.examen?.habilitado && cita.agenda_id === "PRIMERA_VEZ" && (resultadoDeIntento(cita) === "REPROBADO" || resultadoDeIntento(cita) === "NO_ASISTIO") ? (
+          <Link className="btn bg-pine text-white" to={`/citas/nueva?agenda=primera_vez&rut=${encodeURIComponent(cita.rut)}&volver=/agenda/primera_vez`}>Reagendar examen</Link>
+        ) : null}
+        {ficha.examen?.examenActivo && ficha.examen.examenActivo.id !== cita.id ? (
+          <Link className="text-sm font-semibold text-sky underline" to={`/citas/${ficha.examen.examenActivo.id}`}>Examen práctico {ficha.examen.examenActivo.fecha} {ficha.examen.examenActivo.hora}</Link>
+        ) : null}
 
         <dl className="grid gap-x-4 gap-y-2 border-t border-line pt-3 text-sm sm:grid-cols-2">
           <div><dt className="text-xs text-muted">Trámite</dt><dd className="font-medium">{cita.tramite ?? "—"}</dd></div>
@@ -298,7 +317,7 @@ export function CitaDetalle() {
       </section>
 
       <aside className="grid content-start gap-4">
-        {puedeFotos ? (
+        {puedeFotos && requeridos.length > 0 ? (
           <section className="superficie grid gap-2 p-4">
             <h2 className="text-sm font-semibold">Otros documentos</h2>
             <div className="grid grid-cols-2 gap-2">
@@ -324,6 +343,19 @@ export function CitaDetalle() {
                 ))}
               </ul>
             ) : null}
+          </section>
+        ) : null}
+        {(ficha.examen?.intentos ?? []).length > 0 ? (
+          <section className="superficie grid gap-2 p-4">
+            <h2 className="text-sm font-semibold">Examen práctico</h2>
+            <ul className="grid gap-2">
+              {ficha.examen!.intentos.map((intento) => (
+                <li key={intento.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                  <Link className="font-medium text-sky underline" to={`/citas/${intento.id}`}>{textoFecha(intento.fecha).slice(0, 5)} {intento.hora}</Link>
+                  <span className="text-sm font-semibold">{etiquetaIntento(intento)}</span>
+                </li>
+              ))}
+            </ul>
           </section>
         ) : null}
         <section className="superficie grid gap-2 p-4">
