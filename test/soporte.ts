@@ -123,3 +123,23 @@ export function persona(rut: string, nacimiento = "1990-05-05") {
     domicilio: "Pasaje Los Ejemplos 50",
   };
 }
+
+const JPEG_MINIMO = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xd9]);
+
+export async function subirDocumento(citaId: string, tipo: string, sesion: SesionPrueba): Promise<Response> {
+  return exports.default.fetch(`https://licencias.test/api/citas/${citaId}/foto?tipo=${tipo}`, {
+    method: "POST",
+    headers: { origin: "https://licencias.test", "content-type": "image/jpeg", cookie: sesion.cookie, "x-csrf-token": sesion.csrf },
+    body: new Blob([JPEG_MINIMO], { type: "image/jpeg" }),
+  });
+}
+
+export async function completarDocumentos(citaId: string, sesion: SesionPrueba): Promise<string[]> {
+  const ficha = await llamar(`/citas/${citaId}`, { sesion });
+  const faltantes = (ficha.json as { faltantes: string[] }).faltantes;
+  for (const tipo of faltantes) {
+    const respuesta = await subirDocumento(citaId, tipo, sesion);
+    if (respuesta.status !== 201) throw new Error(await respuesta.text());
+  }
+  return faltantes;
+}

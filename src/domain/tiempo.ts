@@ -9,6 +9,12 @@ function pad(n: number): string {
   return String(n).padStart(2, "0");
 }
 
+/** El bloque empieza estrictamente después de `ahora` en la zona de la oficina. */
+export function bloquePosterior(fecha: string, hora: string, ahora: Date, zona = "America/Santiago"): boolean {
+  const local = partesEnZona(ahora, zona);
+  return fecha > local.fecha || (fecha === local.fecha && hora > local.hora);
+}
+
 export function partesEnZona(instante: Date, zona: string): PartesLocales {
   const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone: zona,

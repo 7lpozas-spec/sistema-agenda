@@ -2,15 +2,15 @@
 # .dev.vars no se versiona. En producción use `wrangler secret put` y no deje
 # AUTO_SEED en true.
 
-# r2 guarda las fotos en el bucket local. drive exige las tres variables de Google.
-PHOTO_BACKEND=r2
-
 # Iteraciones PBKDF2-SHA256. 100000 es el valor de partida. Suba este número
 # antes de cualquier uso real si el tiempo de ingreso sigue siendo aceptable.
 PBKDF2_ITERATIONS=100000
 
-# Cuenta de servicio con permiso de edición sobre una carpeta dedicada.
-# La clave PEM puede ir con saltos de línea escapados como \n.
+# Google Drive con un Gmail personal: OAuth con refresh token (docs/google-drive.md).
+GOOGLE_OAUTH_CLIENT_ID=
+GOOGLE_OAUTH_CLIENT_SECRET=
+GOOGLE_OAUTH_REFRESH_TOKEN=
+# Solo con cuenta de servicio y unidad compartida de Workspace.
 GOOGLE_SERVICE_ACCOUNT_EMAIL=
 GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY=
 GOOGLE_DRIVE_FOLDER_ID=
@@ -20,3 +20,4 @@ GOOGLE_DRIVE_FOLDER_ID=
 LICENCIAS_CLAVE_ADMIN=
 LICENCIAS_CLAVE_OPERADOR=
 LICENCIAS_CLAVE_INSTRUCTOR=
+LICENCIAS_CLAVE_RECEPCION=

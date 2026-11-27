@@ -15,6 +15,8 @@ export default defineConfig({
           MIGRATION_SCHEMA: readFileSync(new URL("./migrations/0001_schema.sql", import.meta.url), "utf8"),
           MIGRATION_REFERENCE: readFileSync(new URL("./migrations/0002_referencia.sql", import.meta.url), "utf8"),
           MIGRATION_FOTO: readFileSync(new URL("./migrations/0004_documento_local.sql", import.meta.url), "utf8"),
+          MIGRATION_MESON: readFileSync(new URL("./migrations/0012_atencion_meson.sql", import.meta.url), "utf8"),
+          MIGRATION_EXAMEN: readFileSync(new URL("./migrations/0013_examen_practico.sql", import.meta.url), "utf8"),
         },
       },
     }),

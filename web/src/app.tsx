@@ -1,10 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { NavLink, Navigate, Outlet, Route, Routes, useNavigate } from "react-router-dom";
-import { Menu, Search, X } from "lucide-react";
+import {
+  NavLink,
+  Navigate,
+  Outlet,
+  Route,
+  Routes,
+  useNavigate,
+} from "react-router-dom";
+import {
+  Menu,
+  Search,
+  X,
+  LayoutDashboard,
+  CalendarDays,
+  ClipboardCheck,
+  SlidersHorizontal,
+} from "lucide-react";
 import { NOMBRE_ROL, useAuth, type Rol } from "./auth";
 import { Admin } from "./paginas/admin";
 import { Agenda } from "./paginas/agenda";
 import { CitaDetalle } from "./paginas/cita";
+import { Atencion } from "./paginas/atencion";
 import { Inicio } from "./paginas/inicio";
 import { Login } from "./paginas/login";
 import { NuevaCita } from "./paginas/nueva";
@@ -13,9 +29,11 @@ import { ConexionViva } from "./vivo";
 function puede(rol: Rol, destino: string): boolean {
   if (rol === "ADMIN") return true;
   if (destino.startsWith("/admin")) return false;
-  if (destino === "/") return rol !== "INSTRUCTOR";
+  if (destino === "/") return true;
+  if (destino === "/atencion") return rol === "RECEPCION";
   if (destino === "/agenda/general") return rol === "OPERADOR_AGENDA";
-  if (destino === "/agenda/primera_vez") return rol === "OPERADOR_AGENDA" || rol === "INSTRUCTOR";
+  if (destino === "/agenda/primera_vez")
+    return rol === "OPERADOR_AGENDA" || rol === "INSTRUCTOR";
   if (destino === "/citas/nueva") return rol === "OPERADOR_AGENDA";
   return true;
 }
@@ -26,6 +44,7 @@ export function App() {
       <Route path="/login" element={<Login />} />
       <Route element={<Marco />}>
         <Route path="/" element={<Inicio />} />
+        <Route path="/atencion" element={<Atencion />} />
         <Route path="/agenda/:agenda" element={<Agenda />} />
         <Route path="/citas/nueva" element={<NuevaCita />} />
         <Route path="/citas/:id" element={<CitaDetalle />} />
@@ -48,6 +67,7 @@ function Marco() {
   const enlaces = useMemo(() => {
     if (!usuario) return [];
     const base = [
+      ["/atencion", "Atención"],
       ["/", "Dashboard"],
       ["/agenda/general", "Agenda general"],
       ["/agenda/primera_vez", "Primera vez"],
@@ -56,11 +76,23 @@ function Marco() {
     return base.filter(([href]) => puede(usuario.rol, href));
   }, [usuario]);
 
-  const filtrados = enlaces.filter(([, texto]) => texto.toLowerCase().includes(consulta.trim().toLowerCase()));
+  const iconos = {
+    "/atencion": ClipboardCheck,
+    "/": LayoutDashboard,
+    "/agenda/general": CalendarDays,
+    "/agenda/primera_vez": ClipboardCheck,
+    "/admin": SlidersHorizontal,
+  };
+  const filtrados = enlaces.filter(([, texto]) =>
+    texto.toLowerCase().includes(consulta.trim().toLowerCase()),
+  );
 
   useEffect(() => {
     function tecla(evento: KeyboardEvent) {
-      if ((evento.metaKey || evento.ctrlKey) && evento.key.toLowerCase() === "k") {
+      if (
+        (evento.metaKey || evento.ctrlKey) &&
+        evento.key.toLowerCase() === "k"
+      ) {
         evento.preventDefault();
         setConsulta("");
         setIndice(0);
@@ -74,7 +106,8 @@ function Marco() {
 
   if (!listo) return <div className="min-h-screen bg-paper" />;
   if (!usuario) return <Navigate to="/login" replace />;
-  if (usuario.rol === "INSTRUCTOR" && location.pathname === "/") return <Navigate to="/agenda/primera_vez" replace />;
+  if (usuario.rol === "RECEPCION" && location.pathname === "/login")
+    return <Navigate to="/atencion" replace />;
 
   function ir(href: string) {
     setAbierto(false);
@@ -85,22 +118,38 @@ function Marco() {
   return (
     <div className="min-h-screen bg-paper text-ink">
       <ConexionViva activo />
-      <a href="#contenido" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:bg-white focus:px-3 focus:py-2">
+      <a
+        href="#contenido"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:bg-white focus:px-3 focus:py-2"
+      >
         Saltar al contenido
       </a>
-      <header className="sticky top-0 z-30 border-b border-white/10 bg-pine text-white shadow-[0_8px_24px_rgb(20_27_43/0.18)]">
-        <div className="mx-auto flex h-[4.25rem] max-w-[1440px] items-center gap-4 px-3 sm:h-24 sm:gap-6 sm:px-6">
-          <img src="/logo-recoleta-blanco.png" alt="Municipalidad de Recoleta" width={600} height={231} className="h-14 w-auto shrink-0 sm:h-20" />
-          <nav aria-label="Secciones" className="hidden min-w-0 flex-1 items-center gap-1 lg:flex">
+      <header className="sticky top-0 z-30 border-b border-white/10 bg-pine text-white shadow-sm">
+        <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-4 px-3 sm:gap-6 sm:px-5">
+          <img
+            src="/logo-recoleta-blanco.png"
+            alt="Municipalidad de Recoleta"
+            width={600}
+            height={231}
+            className="h-9 w-auto shrink-0 sm:h-10"
+          />
+          <nav
+            aria-label="Secciones"
+            className="hidden min-w-0 flex-1 items-center gap-1 lg:flex"
+          >
             {enlaces.map(([href, texto]) => (
               <NavLink
                 key={href}
                 to={href}
                 end={href === "/"}
                 className={({ isActive }) =>
-                  `rounded-full px-3 py-1.5 text-sm font-medium ${isActive ? "bg-white text-[#1e283c]" : "text-white/85 hover:bg-white/10"}`
+                  `app-navigation ${isActive ? "active" : ""}`
                 }
               >
+                {(() => {
+                  const Icono = iconos[href];
+                  return <Icono size={16} aria-hidden />;
+                })()}
                 {texto}
               </NavLink>
             ))}
@@ -108,7 +157,7 @@ function Marco() {
           <div className="ml-auto flex items-center gap-2">
             <button
               type="button"
-              className="hidden items-center gap-2 rounded-full border border-white/15 px-3 py-1.5 text-sm text-white/80 lg:flex"
+              className="hidden items-center gap-2 rounded-lg border border-white/15 px-3 py-1.5 text-sm text-white/80 lg:flex"
               onClick={() => {
                 setConsulta("");
                 setIndice(0);
@@ -117,17 +166,32 @@ function Marco() {
               }}
             >
               <Search size={14} />
-              Buscar
-              <kbd className="rounded border border-white/20 px-1 text-[10px]">⌘K</kbd>
+              Secciones
+              <kbd className="rounded border border-white/20 px-1 text-[10px]">
+                ⌘K
+              </kbd>
             </button>
             <span className="hidden text-right sm:block">
-              <span className="block text-sm font-medium">{usuario.nombre}</span>
-              <span className="block text-[11px] text-white/60">{NOMBRE_ROL[usuario.rol]}</span>
+              <span className="block text-sm font-medium">
+                {usuario.nombre}
+              </span>
+              <span className="block text-[11px] text-white/60">
+                {NOMBRE_ROL[usuario.rol]}
+              </span>
             </span>
-            <button type="button" className="rounded-full px-3 py-1.5 text-sm text-white/80 hover:bg-white/10" onClick={() => void salir().then(() => navegar("/login"))}>
+            <button
+              type="button"
+              className="rounded-full px-3 py-1.5 text-sm text-white/80 hover:bg-white/10"
+              onClick={() => void salir().then(() => navegar("/login"))}
+            >
               Salir
             </button>
-            <button type="button" className="rounded-md p-2 lg:hidden" aria-label="Abrir menú" onClick={() => setAbierto(true)}>
+            <button
+              type="button"
+              className="rounded-md p-2 lg:hidden"
+              aria-label="Abrir menú"
+              onClick={() => setAbierto(true)}
+            >
               <Menu size={20} />
             </button>
           </div>
@@ -136,17 +200,37 @@ function Marco() {
       {abierto ? (
         <div className="fixed inset-0 z-40 bg-[#1e283c] text-white lg:hidden">
           <div className="flex items-center justify-between px-4 py-3">
-            <img src="/logo-recoleta-blanco.png" alt="" className="h-12 w-auto" />
-            <button type="button" aria-label="Cerrar menú" onClick={() => setAbierto(false)}><X /></button>
+            <img
+              src="/logo-recoleta-blanco.png"
+              alt=""
+              className="h-12 w-auto"
+            />
+            <button
+              type="button"
+              aria-label="Cerrar menú"
+              onClick={() => setAbierto(false)}
+            >
+              <X />
+            </button>
           </div>
           <nav className="grid gap-1 px-3">
             {enlaces.map(([href, texto]) => (
-              <button key={href} type="button" className="rounded-xl px-3 py-3 text-left text-lg" onClick={() => ir(href)}>{texto}</button>
+              <button
+                key={href}
+                type="button"
+                className="rounded-xl px-3 py-3 text-left text-lg"
+                onClick={() => ir(href)}
+              >
+                {texto}
+              </button>
             ))}
           </nav>
         </div>
       ) : null}
-      <main id="contenido" className="mx-auto w-full max-w-[1440px] px-4 py-6 sm:px-6 sm:py-8">
+      <main
+        id="contenido"
+        className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:px-5"
+      >
         <Outlet />
       </main>
       <dialog
@@ -162,12 +246,14 @@ function Marco() {
             if (destino) ir(destino);
           }}
         >
-          <label className="sr-only" htmlFor="comando">Buscar</label>
+          <label className="sr-only" htmlFor="comando">
+            Buscar sección
+          </label>
           <input
             id="comando"
             ref={campo}
             className="border-b border-line px-4 py-3.5 text-base outline-none"
-            placeholder="Buscar"
+            placeholder="Ir a una sección…"
             value={consulta}
             onChange={(evento) => {
               setConsulta(evento.target.value);
@@ -185,7 +271,11 @@ function Marco() {
             }}
           />
           <ul className="max-h-80 overflow-auto p-2">
-            {filtrados.length === 0 ? <li className="px-3 py-6 text-center text-sm text-muted">Sin resultados</li> : null}
+            {filtrados.length === 0 ? (
+              <li className="px-3 py-6 text-center text-sm text-muted">
+                Sin resultados
+              </li>
+            ) : null}
             {filtrados.map(([href, texto], i) => (
               <li key={href}>
                 <button

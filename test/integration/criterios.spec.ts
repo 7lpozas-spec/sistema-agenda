@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { digitoVerificador } from "../../src/domain/rut";
 import { partesEnZona, sumarDias, instanteLocal } from "../../src/domain/tiempo";
 import { tareasProgramadas } from "../../src/app";
-import { entrar, llamar } from "../soporte";
+import { completarDocumentos, entrar, llamar, subirDocumento } from "../soporte";
 
 function rut(cuerpo: number): string {
   return `${cuerpo}-${digitoVerificador(String(cuerpo))}`;
@@ -85,7 +85,11 @@ describe("criterios de aceptación", () => {
     const operador = await entrar("INSTRUCTOR");
     const fecha = await fechaLibre();
     await abrir("GENERAL", fecha, "11:00", 3, 10);
-    expect((await llamar("/dashboard", { sesion: operador })).status).toBe(403);
+    const tableroInstructor = await llamar("/dashboard", { sesion: operador });
+    expect(tableroInstructor.status).toBe(200);
+    expect((tableroInstructor.json as { agendas: { agenda: string }[] }).agendas.every((fila) => fila.agenda !== "GENERAL")).toBe(true);
+    expect((await llamar("/estadisticas?agenda=GENERAL", { sesion: operador })).status).toBe(403);
+    expect((await llamar("/huecos?agenda=GENERAL", { sesion: operador })).status).toBe(403);
     expect((await llamar("/citas", { method: "POST", sesion: operador, body: { tipoTramiteId: "CONTROL_RENOVACION" } })).status).toBe(403);
     expect((await llamar("/agendas/GENERAL/proxima-fecha", { sesion: operador })).status).toBe(403);
     const lista = await llamar("/lista-dia", { sesion: operador });
@@ -118,8 +122,9 @@ describe("criterios de aceptación", () => {
   it("4, 12, 13, 17, 18 y 19. Dashboard, catálogo, canje y exportación", async () => {
     const admin = await entrar("ADMIN");
     const tipos = await llamar("/tipos-tramite", { sesion: admin });
-    expect((tipos.json as { tipos: { nombre: string }[] }).tipos).toHaveLength(12);
+    expect((tipos.json as { tipos: { nombre: string }[] }).tipos).toHaveLength(13);
     expect((tipos.json as { tipos: { nombre: string }[] }).tipos.map((t) => t.nombre)).toContain("Primer Otorgamiento Clase B 17");
+    expect((tipos.json as { tipos: { nombre: string }[] }).tipos.map((t) => t.nombre)).toContain("Examen práctico");
     const editado = await llamar("/config/tipos-tramite/DUPLICADO", { method: "PATCH", sesion: admin, body: { nombre: "Duplicado" } });
     expect(editado.status).toBe(200);
     const francesa = await llamar("/citas", {
@@ -178,7 +183,7 @@ describe("criterios de aceptación", () => {
     });
     if (subida.status !== 201) throw new Error(await subida.text());
     const doc = await subida.json() as { documento: { id: string; ruta: string; bytes: number } };
-    expect(doc.documento.ruta.startsWith("Licencias-Agendamiento/")).toBe(true);
+    expect(doc.documento.ruta.startsWith(`${fecha}/`)).toBe(true);
     expect(doc.documento.bytes).toBeLessThanOrEqual(500 * 1024);
     const guardado = await env.FOTOS.get(doc.documento.ruta);
     const bytes = new Uint8Array(await guardado!.arrayBuffer());
@@ -187,6 +192,27 @@ describe("criterios de aceptación", () => {
     expect(lectura.status).toBe(200);
     const lecturaAudit = await env.DB.prepare("SELECT COUNT(*) AS n FROM auditoria WHERE accion = 'leer_documento' AND entidad_id = ?").bind(doc.documento.id).first<{ n: number }>();
     expect(lecturaAudit?.n).toBe(1);
+
+    const pendiente = await llamar(`/citas/${id}`, { sesion: admin });
+    expect((pendiente.json as { faltantes: string[] }).faltantes).toEqual(["CARNET_FRENTE", "CARNET_REVERSO", "LICENCIA_FRENTE", "LICENCIA_REVERSO"]);
+    const bloqueado = await llamar(`/citas/${id}/comprobante.pdf`, { sesion: admin });
+    expect(bloqueado.status).toBe(409);
+    expect(JSON.stringify(bloqueado.json)).toContain("DOCUMENTOS_PENDIENTES");
+    const recepcion = await entrar("RECEPCION");
+    const otroDia = await subirDocumento(id, "CARNET_FRENTE", recepcion);
+    expect(otroDia.status).toBe(403);
+    expect(await subirDocumento(id, "CARNET_FRENTE", admin)).toHaveProperty("status", 201);
+    expect(await subirDocumento(id, "CARNET_FRENTE", admin)).toHaveProperty("status", 201);
+    const parcial = await env.DB.prepare("SELECT docs_cargados FROM citas WHERE id = ?").bind(id).first<{ docs_cargados: number }>();
+    expect(parcial?.docs_cargados).toBe(1);
+    await completarDocumentos(id, admin);
+    const completa = await llamar(`/citas/${id}`, { sesion: admin });
+    expect(completa.json).toMatchObject({ faltantes: [], comprobante: true });
+    const cargados = await env.DB.prepare("SELECT docs_cargados FROM citas WHERE id = ?").bind(id).first<{ docs_cargados: number }>();
+    expect(cargados?.docs_cargados).toBe(4);
+    const vigentes = await env.DB.prepare("SELECT COUNT(*) AS n FROM documentos WHERE cita_id = ? AND tipo = 'CARNET_FRENTE' AND vigente = 1").bind(id).first<{ n: number }>();
+    expect(vigentes?.n).toBe(1);
+    expect((await llamar(`/citas/${id}/comprobante.pdf`, { sesion: admin })).status).toBe(200);
 
     const manana = sumarDias(partesEnZona(new Date(), "America/Santiago").fecha, 1);
     await abrir("GENERAL", manana, "08:30", 2, 5);
@@ -199,18 +225,32 @@ describe("criterios de aceptación", () => {
     await tareasProgramadas(env, instanteLocal(hoy, "10:00", "America/Santiago"));
     await tareasProgramadas(env, instanteLocal(hoy, "10:00", "America/Santiago"));
     const correos = await env.DB.prepare("SELECT COUNT(*) AS n FROM correos_log WHERE cita_id = ? AND tipo = 'RECORDATORIO'").bind(citaRecordada).first<{ n: number }>();
-    expect(correos?.n).toBe(1);
+    // Sin proveedor configurado, cada intento queda como error y puede reintentarse.
+    expect(correos?.n).toBe(2);
+    const fallidos = await env.DB.prepare("SELECT COUNT(*) AS n FROM correos_log WHERE cita_id = ? AND tipo = 'RECORDATORIO' AND estado = 'ERROR'").bind(citaRecordada).first<{ n: number }>();
+    expect(fallidos?.n).toBe(2);
+    const marca = await env.DB.prepare("SELECT recordatorio_enviado_at FROM citas WHERE id = ?").bind(citaRecordada).first<{ recordatorio_enviado_at: string | null }>();
+    expect(marca?.recordatorio_enviado_at).toBeNull();
     await env.DB.prepare("UPDATE citas SET estado = 'CANCELADA' WHERE id = ?").bind(citaRecordada).run();
     await env.DB.prepare("UPDATE citas SET recordatorio_enviado_at = NULL WHERE id = ?").bind(citaRecordada).run();
     await tareasProgramadas(env, instanteLocal(hoy, "10:00", "America/Santiago"));
     const despues = await env.DB.prepare("SELECT COUNT(*) AS n FROM correos_log WHERE cita_id = ? AND tipo = 'RECORDATORIO'").bind(citaRecordada).first<{ n: number }>();
-    expect(despues?.n).toBe(1);
+    expect(despues?.n).toBe(2);
 
+    await abrir("GENERAL", fecha, "08:30", 2, 4);
     await abrir("PRIMERA_VEZ", fecha, "08:30", 2, 4);
     const pv = await entrar("OPERADOR_AGENDA");
-    const citaPv = await llamar("/citas", {
+    const otorga = await llamar("/citas", {
       method: "POST", sesion: pv,
       body: { tipoTramiteId: "PRIMER_OTORG_NO_PROF", fecha, hora: "08:30", canal: "PRESENCIAL", clases: ["B"], ciudadano: persona(25000010) },
+    });
+    expect(otorga.status).toBe(201);
+    const idOtorga = (otorga.json as { cita: { id: string } }).cita.id;
+    expect((await llamar(`/citas/${idOtorga}/asistencia`, { method: "POST", sesion: admin, body: { estado: "ASISTIO" } })).status).toBe(200);
+    expect((await llamar(`/citas/${idOtorga}/atencion`, { method: "POST", sesion: admin })).status).toBe(200);
+    const citaPv = await llamar("/citas", {
+      method: "POST", sesion: pv,
+      body: { tipoTramiteId: "EXAMEN_PRACTICO", fecha, hora: "08:30", canal: "PRESENCIAL", clases: ["B"], ciudadano: persona(25000010) },
     });
     expect(citaPv.status).toBe(201);
     const ausencia = await llamar("/config/examinadores/ausencia", { method: "POST", sesion: admin, body: { fecha, motivo: "Licencia médica de prueba" } });

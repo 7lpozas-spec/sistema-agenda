@@ -29,6 +29,15 @@ export function normalizarRut(entrada: string): string | null {
   return `${cuerpo}-${dv}`;
 }
 
+/** Muestra el RUT con puntos mientras se escribe, sin validar el dígito. */
+export function mascaraRut(entrada: string): string {
+  const limpio = entrada.replace(/[^0-9kK]/g, "").toUpperCase().slice(0, 9);
+  if (limpio.length <= 1) return limpio;
+  const dv = limpio.slice(-1);
+  const cuerpo = limpio.slice(0, -1);
+  return `${cuerpo.replace(/\B(?=(\d{3})+(?!\d))/g, ".")}-${dv}`;
+}
+
 export function formatearRut(normalizado: string): string {
   const [cuerpo, dv] = normalizado.split("-");
   const conPuntos = cuerpo.replace(/\B(?=(\d{3})+(?!\d))/g, ".");

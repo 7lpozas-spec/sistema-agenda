@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, fechaHoy } from "../api";
+import { api } from "../api";
 import { useAuth } from "../auth";
 import { Fecha } from "../fecha";
 import { Aviso, Boton, Campo, Cargando, Vacio, claseCampo } from "../ui";
@@ -31,7 +31,7 @@ function visible(fila: Parametro): boolean {
 const ETIQUETA: Record<string, string> = {
   auth_modo: "Autenticación",
   zona_horaria: "Zona horaria",
-  hora_cierre_automatico: "Cierre automático",
+  gracia_cierre_minutos: "Gracia del cierre",
   hora_recordatorio: "Hora de recordatorio",
   minutos_deshacer_asistencia: "Minutos para deshacer",
   alerta_inasistencias: "Alerta de inasistencias",
@@ -66,7 +66,7 @@ export function Admin() {
   if (usuario && usuario.rol !== "ADMIN") return <Aviso tono="info">Solo administración entra a esta sección.</Aviso>;
   return (
     <section className="grid gap-4">
-      <h1 className="text-3xl font-semibold">Administración</h1>
+      <h1 className="text-xl font-semibold tracking-tight">Administración</h1>
       <div className="flex flex-wrap gap-1 rounded-full bg-white p-1 shadow-sm" role="tablist" aria-label="Herramientas">
         {[
           ["parametros", "Parámetros"],
@@ -74,6 +74,7 @@ export function Admin() {
           ["importar", "Importar"],
           ["usuarios", "Cuentas"],
           ["feriados", "Feriados"],
+          ["servicios", "Servicios del mesón"],
           ["cupos", "Cupos"],
           ["auditoria", "Auditoría"],
         ].map(([id, texto]) => (
@@ -88,6 +89,7 @@ export function Admin() {
       {seccion === "importar" ? <Importar /> : null}
       {seccion === "usuarios" ? <Cuentas /> : null}
       {seccion === "feriados" ? <Feriados /> : null}
+      {seccion === "servicios" ? <ServiciosMeson /> : null}
       {seccion === "cupos" ? <Cupos /> : null}
       {seccion === "auditoria" ? <Auditoria /> : null}
       </div>
@@ -130,8 +132,8 @@ function Parametros() {
           </div>
         ))}
       </div>
-      <div className="sticky bottom-3 flex justify-end">
-        <Boton>Guardar parámetros</Boton>
+      <div className="flex justify-end pt-2">
+        <Boton>Guardar</Boton>
       </div>
     </form>
   );
@@ -166,9 +168,12 @@ function Cuentas() {
       {error ? <Aviso>{error}</Aviso> : null}
       <ul className="grid gap-2">
         {usuarios.map((cuenta) => (
-          <li key={cuenta.id} className="flex flex-wrap justify-between gap-2 border border-line bg-card px-3 py-2 text-sm">
+          <li key={cuenta.id} className="flex flex-wrap items-center justify-between gap-2 border border-line bg-card px-3 py-2 text-sm">
             <span>{cuenta.nombre} · {cuenta.email}</span>
-            <span>{cuenta.rol} · {cuenta.activo ? "activa" : "inactiva"}</span>
+            <span className="flex flex-wrap items-center gap-2">
+              <span>{cuenta.rol} · {cuenta.activo ? "activa" : "inactiva"}</span>
+              <button type="button" className="underline" onClick={() => void api(`/api/usuarios/${cuenta.id}`, { method: "PATCH", body: { activo: !cuenta.activo } }).then(() => api<{ usuarios: Usuario[] }>("/api/usuarios").then((datos) => setUsuarios(datos.usuarios)))}>{cuenta.activo ? "Desactivar" : "Activar"}</button>
+            </span>
           </li>
         ))}
       </ul>
@@ -181,6 +186,7 @@ function Cuentas() {
             <option value="ADMIN">Administración</option>
             <option value="OPERADOR_AGENDA">Operador de agenda</option>
             <option value="INSTRUCTOR">Instructor</option>
+            <option value="RECEPCION">Recepción</option>
           </select>
         </Campo>
         <Campo id="clave-cuenta" etiqueta="Contraseña temporal" ayuda="Mínimo 12 caracteres, con mayúscula, minúscula y número.">
@@ -188,7 +194,39 @@ function Cuentas() {
         </Campo>
         <Boton>Crear cuenta</Boton>
       </form>
+      <ClaveCuenta usuarios={usuarios} />
     </div>
+  );
+}
+
+function ClaveCuenta({ usuarios }: { usuarios: Usuario[] }) {
+  const [id, setId] = useState(usuarios[0]?.id ?? "");
+  const [clave, setClave] = useState("");
+  const [error, setError] = useState("");
+  async function guardar(evento: FormEvent) {
+    evento.preventDefault();
+    setError("");
+    try {
+      await api(`/api/usuarios/${id}`, { method: "PATCH", body: { contrasena: clave } });
+      setClave("");
+    } catch (falla) {
+      setError(falla instanceof Error ? falla.message : "No se pudo cambiar la clave.");
+    }
+  }
+  return (
+    <form onSubmit={guardar} className="grid gap-3 border border-line bg-card p-4">
+      <h2 className="text-lg font-semibold">Nueva clave</h2>
+      {error ? <Aviso>{error}</Aviso> : null}
+      <Campo id="cuenta-clave" etiqueta="Cuenta">
+        <select id="cuenta-clave" className={claseCampo} value={id} onChange={(e) => setId(e.target.value)}>
+          {usuarios.map((cuenta) => <option key={cuenta.id} value={cuenta.id}>{cuenta.nombre}</option>)}
+        </select>
+      </Campo>
+      <Campo id="nueva-clave" etiqueta="Clave" ayuda="Mínimo 12 caracteres, con mayúscula, minúscula y número.">
+        <input id="nueva-clave" className={claseCampo} type="password" autoComplete="new-password" value={clave} onChange={(e) => setClave(e.target.value)} required />
+      </Campo>
+      <Boton>Guardar clave</Boton>
+    </form>
   );
 }
 
@@ -198,7 +236,12 @@ function Feriados() {
   const [nombre, setNombre] = useState("");
   const [error, setError] = useState("");
   function cargar() {
-    void api<{ feriados: Feriado[] }>("/api/feriados").then((datos) => setFilas(datos.feriados));
+    void api<{ feriados: Feriado[] }>("/api/feriados")
+      .then((datos) => setFilas(datos.feriados))
+      .catch((falla: unknown) => {
+        setFilas([]);
+        setError(falla instanceof Error ? falla.message : "No se pudieron leer los feriados.");
+      });
   }
   useEffect(cargar, []);
   async function agregar(evento: FormEvent) {
@@ -220,6 +263,7 @@ function Feriados() {
       <ul className="grid max-h-80 gap-1 overflow-auto text-sm">
         {filas?.filter((fila) => fila.activo === 1).map((fila) => <li key={fila.fecha}>{fila.fecha} · {fila.nombre}</li>)}
       </ul>
+      <Cierre />
       <form onSubmit={agregar} className="grid gap-3 sm:grid-cols-[10rem_1fr_auto] sm:items-end">
         <Fecha id="fecha-feriado" etiqueta="Fecha" valor={fecha} alCambiar={setFecha} />
         <Campo id="nombre-feriado" etiqueta="Nombre"><input id="nombre-feriado" className={claseCampo} value={nombre} onChange={(e) => setNombre(e.target.value)} required /></Campo>
@@ -229,9 +273,115 @@ function Feriados() {
   );
 }
 
+interface Propuesta { citaId: string; nombre: string; horaActual: string; fecha: string; hora: string }
+interface Afectada { id: string; hora: string; nombre: string }
+
+function Cierre() {
+  const [agenda, setAgenda] = useState("GENERAL");
+  const [fecha, setFecha] = useState("");
+  const [hora, setHora] = useState("");
+  const [motivo, setMotivo] = useState("");
+  const [propuestas, setPropuestas] = useState<Propuesta[]>([]);
+  const [sinCupo, setSinCupo] = useState<Afectada[]>([]);
+  const [revisado, setRevisado] = useState<"dia" | "bloque" | "">("");
+  const [error, setError] = useState("");
+  const [aviso, setAviso] = useState("");
+  function aplicar(modo: "dia" | "bloque", citas: Afectada[], lista: Propuesta[]) {
+    const asignadas = new Set(lista.map((fila) => fila.citaId));
+    setPropuestas(lista);
+    setSinCupo(citas.filter((fila) => !asignadas.has(fila.id)));
+    setRevisado(modo);
+  }
+  function descartar() {
+    setPropuestas([]);
+    setSinCupo([]);
+    setRevisado("");
+    setAviso("");
+  }
+  async function revisarDia(evento: FormEvent) {
+    evento.preventDefault();
+    setError("");
+    setAviso("");
+    try {
+      const respuesta = await api<{ citas: Afectada[]; propuestas: Propuesta[] }>("/api/config/bloquear-dia", { method: "POST", body: { agendaId: agenda, fecha } });
+      aplicar("dia", respuesta.citas, respuesta.propuestas);
+    } catch (falla) {
+      setError(falla instanceof Error ? falla.message : "No se pudo revisar el día.");
+    }
+  }
+  async function revisarBloque() {
+    setError("");
+    setAviso("");
+    if (!/^\d{2}:\d{2}$/.test(hora)) {
+      setError("Indique la hora del bloque.");
+      return;
+    }
+    try {
+      const respuesta = await api<{ citas: Afectada[]; propuestas: Propuesta[] }>("/api/bloques/bloquear", { method: "POST", body: { agendaId: agenda, fecha, hora } });
+      aplicar("bloque", respuesta.citas, respuesta.propuestas);
+    } catch (falla) {
+      setError(falla instanceof Error ? falla.message : "No se pudo revisar el bloque.");
+    }
+  }
+  async function confirmar() {
+    setError("");
+    setAviso("");
+    if (revisado === "dia" && motivo.trim().length < 3) {
+      setError("Indique el motivo del día.");
+      return;
+    }
+    try {
+      const respuesta = await api<{ reubicadas: number }>("/api/config/cierre/confirmar", {
+        method: "POST",
+        body: {
+          agendaId: agenda,
+          fecha,
+          hora: revisado === "bloque" ? hora : undefined,
+          motivo,
+          movimientos: propuestas.map((fila) => ({ citaId: fila.citaId, fecha: fila.fecha, hora: fila.hora })),
+        },
+      });
+      setPropuestas([]);
+      setSinCupo([]);
+      setRevisado("");
+      setAviso(`Cerrado. Reubicadas: ${respuesta.reubicadas}`);
+    } catch (falla) {
+      setError(falla instanceof Error ? falla.message : "No se pudo cerrar.");
+    }
+  }
+  return (
+    <form onSubmit={revisarDia} className="grid gap-3 border border-line p-3">
+      <h2 className="text-sm font-semibold">Cierre de día o bloque</h2>
+      {error ? <Aviso>{error}</Aviso> : null}
+      {aviso ? <p className="text-sm font-medium text-[#146c43]">{aviso}</p> : null}
+      <select className={claseCampo} value={agenda} onChange={(e) => setAgenda(e.target.value)} aria-label="Agenda del cierre">
+        <option value="GENERAL">General</option>
+        <option value="PRIMERA_VEZ">Primera vez</option>
+      </select>
+      <Fecha id="cierre-fecha" etiqueta="Fecha" valor={fecha} alCambiar={setFecha} />
+      <Campo id="cierre-hora" etiqueta="Hora del bloque"><input id="cierre-hora" className={claseCampo} inputMode="numeric" pattern="[0-2][0-9]:[0-5][0-9]" placeholder="09:00" value={hora} onChange={(e) => setHora(e.target.value)} /></Campo>
+      <Campo id="cierre-motivo" etiqueta="Motivo del día"><input id="cierre-motivo" className={claseCampo} value={motivo} onChange={(e) => setMotivo(e.target.value)} /></Campo>
+      <div className="flex flex-wrap gap-2">
+        <Boton>Revisar día</Boton>
+        <button type="button" className="btn border border-line bg-white" onClick={() => void revisarBloque()}>Revisar bloque</button>
+      </div>
+      {revisado ? (
+        <div className="grid gap-2">
+          <ul className="grid gap-1 text-sm">
+            {propuestas.map((fila) => <li key={fila.citaId}>{fila.horaActual} {fila.nombre} → {fila.fecha.slice(8)}-{fila.fecha.slice(5, 7)} {fila.hora}</li>)}
+            {sinCupo.map((fila) => <li key={fila.id} className="text-alert">{fila.hora} {fila.nombre} · sin cupo</li>)}
+          </ul>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn bg-sky text-white" onClick={() => void confirmar()}>Confirmar cierre</button>
+            <button type="button" className="btn border border-line bg-white" onClick={descartar}>Cancelar</button>
+          </div>
+        </div>
+      ) : null}
+    </form>
+  );
+}
+
 function Cupos() {
-  const [desde, setDesde] = useState(fechaHoy());
-  const [hasta, setHasta] = useState(fechaHoy());
   const [error, setError] = useState("");
   async function generar(evento: FormEvent) {
     evento.preventDefault();
@@ -251,8 +401,6 @@ function Cupos() {
   return (
     <form onSubmit={generar} className="grid max-w-xl gap-3">
       {error ? <Aviso>{error}</Aviso> : null}
-      <Fecha id="desde-cupo" etiqueta="Desde" valor={desde} alCambiar={setDesde} />
-      <Fecha id="hasta-cupo" etiqueta="Hasta" valor={hasta} alCambiar={setHasta} />
       <Boton>Generar cupos vacíos</Boton>
     </form>
   );
@@ -393,6 +541,112 @@ function Auditoria() {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+interface ServicioMeson { id: string; nombre: string; activo: number; orden: number }
+
+function ServiciosMeson() {
+  const [filas, setFilas] = useState<ServicioMeson[] | null>(null);
+  const [nombre, setNombre] = useState("");
+  const [editando, setEditando] = useState<Record<string, string>>({});
+  const [error, setError] = useState("");
+  function cargar() {
+    void api<{ servicios: ServicioMeson[] }>("/api/meson/servicios?todos=1")
+      .then((datos) => setFilas(datos.servicios))
+      .catch((falla: unknown) => { setFilas([]); setError(falla instanceof Error ? falla.message : "No se pudieron leer los servicios."); });
+  }
+  useEffect(cargar, []);
+  async function guardar(id: string, cambios: Record<string, unknown>) {
+    setError("");
+    try {
+      await api(`/api/config/servicios-meson/${id}`, { method: "PATCH", body: cambios });
+      setEditando((prev) => { const copia = { ...prev }; delete copia[id]; return copia; });
+      cargar();
+    } catch (falla) {
+      setError(falla instanceof Error ? falla.message : "No se pudo guardar.");
+    }
+  }
+  async function mover(indice: number, delta: number) {
+    const lista = [...activos];
+    const [item] = lista.splice(indice, 1);
+    lista.splice(indice + delta, 0, item);
+    setError("");
+    try {
+      for (const [posicion, servicio] of lista.entries()) {
+        const orden = (posicion + 1) * 10;
+        if (servicio.orden !== orden) await api(`/api/config/servicios-meson/${servicio.id}`, { method: "PATCH", body: { orden } });
+      }
+    } catch (falla) {
+      setError(falla instanceof Error ? falla.message : "No se pudo ordenar.");
+    }
+    cargar();
+  }
+  async function agregar(evento: FormEvent) {
+    evento.preventDefault();
+    setError("");
+    try {
+      await api("/api/config/servicios-meson", { method: "POST", body: { nombre } });
+      setNombre("");
+      cargar();
+    } catch (falla) {
+      setError(falla instanceof Error ? falla.message : "No se pudo crear el servicio.");
+    }
+  }
+  const activos = (filas ?? []).filter((fila) => fila.activo === 1);
+  return (
+    <div className="grid gap-4">
+      {error ? <Aviso>{error}</Aviso> : null}
+      {!filas ? <Cargando texto="Cargando servicios…" /> : null}
+      {filas && filas.length === 0 ? <Vacio texto="Sin servicios" /> : null}
+      {filas && filas.length > 0 ? (
+        <div className="overflow-hidden rounded-lg border border-line">
+          <table className="w-full text-left text-sm">
+            <caption className="sr-only">Servicios del mesón</caption>
+            <thead className="bg-paper text-[11px] uppercase tracking-wide text-muted">
+              <tr><th className="w-20 px-3 py-2">Orden</th><th className="px-3 py-2">Servicio</th><th className="w-28 px-3 py-2">Estado</th><th className="w-48 px-3 py-2 text-right"><span className="sr-only">Acciones</span></th></tr>
+            </thead>
+            <tbody>
+              {filas.map((fila) => {
+                const indice = activos.findIndex((item) => item.id === fila.id);
+                const enEdicion = editando[fila.id] !== undefined;
+                return (
+                  <tr key={fila.id} className={`border-t border-line ${fila.activo ? "" : "text-muted"}`}>
+                    <td className="px-3 py-1.5">
+                      {fila.activo ? (
+                        <span className="flex gap-1">
+                          <button type="button" aria-label={`Subir ${fila.nombre}`} disabled={indice <= 0} className="h-7 w-7 rounded border border-line disabled:opacity-30" onClick={() => void mover(indice, -1)}>↑</button>
+                          <button type="button" aria-label={`Bajar ${fila.nombre}`} disabled={indice < 0 || indice >= activos.length - 1} className="h-7 w-7 rounded border border-line disabled:opacity-30" onClick={() => void mover(indice, 1)}>↓</button>
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-1.5">
+                      {enEdicion ? (
+                        <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); void guardar(fila.id, { nombre: editando[fila.id] }); }}>
+                          <label className="sr-only" htmlFor={`srv-${fila.id}`}>Nombre</label>
+                          <input id={`srv-${fila.id}`} className={claseCampo} value={editando[fila.id]} autoFocus onChange={(e) => setEditando((prev) => ({ ...prev, [fila.id]: e.target.value }))} />
+                          <button type="submit" className="btn bg-pine text-white">Guardar</button>
+                          <button type="button" className="btn border border-line bg-white" onClick={() => setEditando((prev) => { const copia = { ...prev }; delete copia[fila.id]; return copia; })}>Cancelar</button>
+                        </form>
+                      ) : fila.nombre}
+                    </td>
+                    <td className="px-3 py-1.5"><span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${fila.activo ? "bg-[#e5f6ec] text-[#146c43]" : "bg-[#eef1f5] text-[#586a80]"}`}>{fila.activo ? "Activo" : "Inactivo"}</span></td>
+                    <td className="px-3 py-1.5 text-right">
+                      {!enEdicion ? <button type="button" className="mr-1 rounded-md border border-line px-2.5 py-1 text-[13px] font-semibold hover:bg-paper" onClick={() => setEditando((prev) => ({ ...prev, [fila.id]: fila.nombre }))}>Editar</button> : null}
+                      <button type="button" className="rounded-md border border-line px-2.5 py-1 text-[13px] font-semibold hover:bg-paper" onClick={() => void guardar(fila.id, { activo: fila.activo !== 1 })}>{fila.activo ? "Desactivar" : "Activar"}</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      <form onSubmit={agregar} className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+        <Campo id="nuevo-servicio" etiqueta="Nuevo servicio"><input id="nuevo-servicio" className={claseCampo} value={nombre} minLength={3} maxLength={80} onChange={(e) => setNombre(e.target.value)} required /></Campo>
+        <Boton>Agregar</Boton>
+      </form>
     </div>
   );
 }

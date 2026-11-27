@@ -44,7 +44,7 @@ export function Campo({ id, etiqueta, ayuda, children }: { id: string; etiqueta:
 }
 
 export const claseCampo =
-  "h-10 w-full rounded-lg border border-line bg-white px-3 text-sm text-ink transition-colors outline-none hover:border-[#cfc6ba] focus:border-sky disabled:bg-paper disabled:text-muted";
+  "h-10 w-full rounded-lg border border-line bg-white px-3 text-sm text-ink transition-colors outline-none hover:border-[#b8c8dd] focus:border-sky disabled:bg-paper disabled:text-muted";
 
 export function Boton({
   children,
@@ -99,7 +99,7 @@ export function Estado({ valor }: { valor: string }) {
 
 export function tonoEstado(valor: string): string {
   if (valor === "ASISTIO") return "bg-[#e5f6ec] text-[#146c43]";
-  if (valor === "NO_ASISTIO") return "bg-[#f3efe9] text-[#7a726a]";
+  if (valor === "NO_ASISTIO") return "bg-[#eef1f5] text-[#586a80]";
   if (valor === "ATRASADO") return "bg-[#fff1dc] text-[#9a5b00]";
   if (valor === "CANCELADA" || valor === "ANULADA") return "bg-[#f8e8e6] text-alert";
   return "bg-[#e7eefc] text-[#1e3a8a]";
@@ -245,5 +245,21 @@ export function Tabla<T extends { id: string }>({
         </div>
       </div>
     </div>
+  );
+}
+
+/** Documentos cargados de los requeridos. Ámbar si falta alguno. */
+export function Docs({ cargados, requeridos, compacto = false }: { cargados?: number | null; requeridos?: number | null; compacto?: boolean }) {
+  const total = requeridos ?? 0;
+  if (total <= 0) return null;
+  const listos = Math.min(cargados ?? 0, total);
+  const completo = listos >= total;
+  return (
+    <span
+      title={completo ? "Documentos completos" : `Faltan ${total - listos} documentos`}
+      className={`inline-flex h-5 shrink-0 items-center gap-1 rounded-full px-1.5 text-[11px] font-semibold tabular-nums ${completo ? "bg-[#e5f6ec] text-[#146c43]" : "bg-[#fff1dc] text-[#9a5b00]"}`}
+    >
+      {compacto ? null : "Docs "}{listos}/{total}
+    </span>
   );
 }

@@ -11,7 +11,7 @@ Hay dos agendas:
 
 Duplicado, canje, regularización y cambio de domicilio no se agendan. El horario de partida es de lunes a sábado, de 08:30 a 14:00. El sábado se edita aparte en Administración → Horario.
 
-El panel de inicio tiene indicadores, gráficos y descarga CSV, Excel y PDF. El calendario tiene mes, semana y día. La captura de documentos se abre en el celular con un código QR de 15 minutos. Sin credenciales de Google, las fotos quedan en R2; la configuración de Drive está en `docs/google-drive.md`. El despliegue de prueba, con datos ficticios, está en `docs/despliegue-prueba.md` (`npm run deploy:test`).
+El panel de inicio tiene indicadores, gráficos y descarga CSV, Excel y PDF. El calendario tiene mes, semana y día. Los documentos se fotografían desde la ficha de la cita, en el celular o en el PC, con la misma sesión; el resto de los equipos se actualiza en vivo. El comprobante se emite cuando la cita tiene todos sus documentos. Las fotos van a Google Drive; sin credenciales quedan en R2 o en D1 (`docs/google-drive.md`). El despliegue de prueba, con datos ficticios, está en `docs/despliegue-prueba.md` (`npm run deploy:test`).
 
 Los datos de ejemplo son ficticios. No cargue RUT ni fotografías de personas reales en este entorno.
 
@@ -35,7 +35,7 @@ node scripts/crear-cuentas-demo.mjs
 npx wrangler d1 execute licencias_recoleta --local --file seed/semilla.sql
 ```
 
-Los correos de demostración son `admin@ejemplo.cl`, `operador@ejemplo.cl` e `instructor@ejemplo.cl`. Las contraseñas quedan solo en `.dev.vars`.
+Los correos de demostración son `admin@ejemplo.cl`, `operador@ejemplo.cl`, `instructor@ejemplo.cl` y `recepcion@ejemplo.cl`. Las contraseñas quedan solo en `.dev.vars`.
 
 El operador de agenda reserva en General y en Primera Vez, y marca la asistencia del mesón. El instructor solo ve la agenda de primera vez: asistencia y resultado del examen. No hay un operador de atención aparte, porque esa tarea es del mismo mesón.
 
@@ -69,16 +69,13 @@ La reserva del cupo es un `UPDATE` condicionado: solo avanza si `reservados < ca
 
 ## Fotos y Google Drive
 
-En local, `PHOTO_BACKEND` vale `r2` y las fotos quedan en el bucket simulado. Para Drive, copie `.dev.vars.example` a `.dev.vars` y complete:
+Cada trámite pide carnet (frente y reverso) y, si corresponde, licencia (frente y reverso). La ficha muestra qué falta, abre la cámara trasera, comprime la foto en el navegador (≤ 480 KB), la sube y pasa al siguiente documento. Si la red falla, la subida se reintenta al volver la conexión.
 
-- `PHOTO_BACKEND=drive`
-- `GOOGLE_SERVICE_ACCOUNT_EMAIL`
-- `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` (PEM; los saltos de línea pueden ir como `\n`)
-- `GOOGLE_DRIVE_FOLDER_ID`
+Drive es el almacenamiento principal. Credenciales, pasos y la razón para usar OAuth con un Gmail personal: `docs/google-drive.md`. Sin Drive, la foto queda en R2 (binding `FOTOS`) o en D1; con Drive configurado y caído, queda local y el cron la sube después.
 
-La cuenta de servicio necesita permiso de edición sobre esa carpeta, y solo sobre esa carpeta. El alcance que usa el sistema es `https://www.googleapis.com/auth/drive`. En producción las mismas variables se cargan con `wrangler secret put`, nunca en el repositorio.
+## Comprobante
 
-Si Drive está elegido y faltan credenciales, la carga responde con un error y no guarda la foto en otro lado.
+`GET /api/citas/:id/comprobante.pdf` responde `409 DOCUMENTOS_PENDIENTES` con la lista de faltantes si la cita no tiene todos sus documentos. Excepción: citas canceladas o anuladas, porque el PDF sirve de constancia. El sobrecupo sigue la regla normal. La regla está en `src/servicios/documentos.ts` (`comprobanteDisponible`).
 
 ## Listo para desplegar, sin desplegar
 
@@ -90,7 +87,7 @@ Antes de un despliegue aprobado:
 
 1. Crear la base D1 y el bucket R2 en la cuenta de la municipalidad y reemplazar `database_id`.
 2. `npx wrangler d1 migrations apply licencias_recoleta --remote`
-3. Cargar los secretos de Drive y fijar `APP_ENV=production`, `AUTO_SEED=false` y `PHOTO_BACKEND=drive`.
+3. Cargar los secretos de Drive (`docs/google-drive.md`) y fijar `APP_ENV=production` y `AUTO_SEED=false`.
 4. Cambiar las contraseñas. La semilla no corre cuando el entorno es `production`.
 5. `npm run build` y después `npx wrangler deploy`
 

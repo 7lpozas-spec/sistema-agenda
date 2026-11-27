@@ -1,9 +1,12 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { documentosRequeridos } from "../../../src/domain/catalogo";
+import { bloquePosterior } from "../../../src/domain/tiempo";
 import { api, fechaHoy } from "../api";
 import { useAuth } from "../auth";
+import { mascaraRut, normalizarRut } from "../../../src/domain/rut";
 import { Fecha } from "../fecha";
-import { Aviso, Boton, Campo, claseCampo } from "../ui";
+import { Aviso, Campo, Docs, claseCampo } from "../ui";
 
 interface Tipo {
   id: string;
@@ -11,8 +14,15 @@ interface Tipo {
   requiere_agenda: number;
   agenda_id: "GENERAL" | "PRIMERA_VEZ" | null;
   orden: number;
+  requiere_carnet?: number;
+  requiere_licencia?: number;
 }
-interface Bloque { hora: string; capacidad: number; usados: number }
+interface Bloque {
+  hora: string;
+  capacidad: number;
+  usados: number;
+  reservable?: boolean;
+}
 
 export function NuevaCita() {
   const { usuario } = useAuth();
@@ -22,7 +32,7 @@ export function NuevaCita() {
   const [fecha, setFecha] = useState(params.get("fecha") || fechaHoy());
   const [hora, setHora] = useState(params.get("hora") || "");
   const [bloques, setBloques] = useState<Bloque[]>([]);
-  const [rut, setRut] = useState("");
+  const [rut, setRut] = useState(() => mascaraRut(params.get("rut") ?? ""));
   const [nombres, setNombres] = useState("");
   const [apellidos, setApellidos] = useState("");
   const [email, setEmail] = useState("");
@@ -35,135 +45,575 @@ export function NuevaCita() {
   const [domicilio, setDomicilio] = useState(false);
   const [error, setError] = useState("");
   const [creada, setCreada] = useState("");
+  const [guardando, setGuardando] = useState(false);
+  const enviando = useRef(false);
+  const intento = useRef({ cuerpo: "", clave: "" });
+  const [buscando, setBuscando] = useState(false);
+  const [avisoPersona, setAvisoPersona] = useState("");
+  const [activas, setActivas] = useState<
+    { id: string; fecha: string; hora: string }[]
+  >([]);
+  const consultaRut = useRef(0);
+  const [cargandoHoras, setCargandoHoras] = useState(false);
+  const [errorHoras, setErrorHoras] = useState("");
+  const [revisionHoras, setRevisionHoras] = useState(0);
+  const [examen, setExamen] = useState<{
+    habilitado: boolean;
+    codigo?: string;
+    mensaje?: string;
+    examenActivo?: { id: string; fecha: string; hora: string };
+  } | null>(null);
+
+  async function buscarPersona() {
+    const normalizado = normalizarRut(rut);
+    if (!normalizado) {
+      setAvisoPersona("Revise el RUT y su dígito verificador.");
+      return;
+    }
+    const numero = ++consultaRut.current;
+    setBuscando(true);
+    setAvisoPersona("");
+    setActivas([]);
+    try {
+      const datos = await api<{
+        ciudadano: {
+          nombres: string;
+          apellidos: string;
+          email: string | null;
+          sin_correo: number;
+          telefono: string | null;
+          fecha_nacimiento: string | null;
+        } | null;
+        citasActivas: { id: string; fecha: string; hora: string }[];
+        alertaInasistencias: boolean;
+        examen?: {
+          habilitado: boolean;
+          codigo?: string;
+          mensaje?: string;
+          examenActivo?: { id: string; fecha: string; hora: string };
+          clases?: string[];
+        };
+      }>(`/api/ciudadanos?rut=${encodeURIComponent(normalizado)}`);
+      if (numero !== consultaRut.current) return;
+      setRut(normalizado);
+      setActivas(datos.citasActivas);
+      const modoExamen = params.get("agenda") === "primera_vez";
+      if (modoExamen) {
+        const estado = datos.examen ?? { habilitado: false, mensaje: "No está habilitado para el examen práctico." };
+        setExamen(estado);
+        if (datos.ciudadano) {
+          const c = datos.ciudadano;
+          setNombres(c.nombres);
+          setApellidos(c.apellidos);
+          setEmail(c.email ?? "");
+          setSinCorreo(c.sin_correo === 1);
+          setTelefono(c.telefono ?? "");
+          setNacimiento(c.fecha_nacimiento ?? "");
+          if (estado.clases?.length) setClases(estado.clases);
+        }
+        setAvisoPersona("");
+        setError(estado.habilitado ? "" : (estado.mensaje ?? "No está habilitado para el examen práctico."));
+        return;
+      }
+      setExamen(null);
+      if (datos.ciudadano) {
+        const c = datos.ciudadano;
+        setNombres(c.nombres);
+        setApellidos(c.apellidos);
+        setEmail(c.email ?? "");
+        setSinCorreo(c.sin_correo === 1);
+        setTelefono(c.telefono ?? "");
+        setNacimiento(c.fecha_nacimiento ?? "");
+        setAvisoPersona(
+          datos.alertaInasistencias
+            ? "Datos recuperados. La persona registra dos o más inasistencias."
+            : "Datos recuperados.",
+        );
+      } else
+        setAvisoPersona(
+          "No hay registros para este RUT. Complete los datos de la persona.",
+        );
+    } catch (falla) {
+      if (numero === consultaRut.current)
+        setAvisoPersona(
+          falla instanceof Error
+            ? falla.message
+            : "No se pudo consultar el RUT.",
+        );
+    } finally {
+      if (numero === consultaRut.current) setBuscando(false);
+    }
+  }
 
   const tipo = tipos.find((item) => item.id === tipoId);
   useEffect(() => {
     document.title = "Nueva cita · Agendamiento Licencias";
-    void api<{ tipos: Tipo[] }>("/api/tipos-tramite").then((datos) => {
-      const propios = usuario?.rol === "INSTRUCTOR" ? [] : datos.tipos;
-      const pedida = params.get("agenda");
-      const preferido = propios.find((item) => pedida === "primera_vez" ? item.agenda_id === "PRIMERA_VEZ" : pedida === "general" ? item.id === "CONTROL_RENOVACION" : item.requiere_agenda === 1);
-      setTipos(propios);
-      setTipoId(preferido?.id ?? propios[0]?.id ?? "");
-    }).catch((falla: unknown) => setError(falla instanceof Error ? falla.message : "No se pudo leer el catálogo."));
+    void api<{ tipos: Tipo[] }>("/api/tipos-tramite")
+      .then((datos) => {
+        const propios = usuario?.rol === "INSTRUCTOR" ? [] : datos.tipos;
+        const pedida = params.get("agenda");
+        const preferido = propios.find((item) =>
+          pedida === "primera_vez"
+            ? item.id === "EXAMEN_PRACTICO" || item.agenda_id === "PRIMERA_VEZ"
+            : pedida === "general"
+              ? item.id === "CONTROL_RENOVACION"
+              : item.requiere_agenda === 1,
+        );
+        setTipos(propios);
+        setTipoId(preferido?.id ?? propios[0]?.id ?? "");
+      })
+      .catch((falla: unknown) =>
+        setError(
+          falla instanceof Error
+            ? falla.message
+            : "No se pudo leer el catálogo.",
+        ),
+      );
   }, [params, usuario?.rol]);
 
   useEffect(() => {
-    if (!tipo?.agenda_id) { setBloques([]); return; }
-    void api<{ bloques: Bloque[] }>(`/api/agendas/${tipo.agenda_id}/dia/${fecha}`)
-      .then((datos) => setBloques(datos.bloques))
-      .catch(() => setBloques([]));
-  }, [tipo?.agenda_id, fecha]);
+    if (params.get("rut") && normalizarRut(params.get("rut") ?? "")) void buscarPersona();
+    // Solo al abrir con un RUT ya indicado (ficha o cola de pendientes).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const controlador = new AbortController();
+    setBloques([]);
+    setErrorHoras("");
+    if (!tipo?.agenda_id) {
+      setCargandoHoras(false);
+      return;
+    }
+    setCargandoHoras(true);
+    void api<{ bloques: Bloque[] }>(
+      `/api/agendas/${tipo.agenda_id}/dia/${fecha}`,
+      { signal: controlador.signal },
+    )
+      .then((datos) => {
+        setBloques(datos.bloques);
+        setHora((actual) =>
+          datos.bloques.some((b) => b.hora === actual && horaVigente(fecha, b))
+            ? actual
+            : "",
+        );
+      })
+      .catch((falla: unknown) => {
+        if (!controlador.signal.aborted)
+          setErrorHoras(
+            falla instanceof Error
+              ? falla.message
+              : "No se pudieron cargar los horarios.",
+          );
+      })
+      .finally(() => {
+        if (!controlador.signal.aborted) setCargandoHoras(false);
+      });
+    return () => controlador.abort();
+  }, [tipo?.agenda_id, fecha, revisionHoras]);
 
   function alternarClase(codigo: string) {
-    setClases((actual) => actual.includes(codigo) ? actual.filter((item) => item !== codigo) : [...actual, codigo]);
+    setClases((actual) =>
+      actual.includes(codigo)
+        ? actual.filter((item) => item !== codigo)
+        : [...actual, codigo],
+    );
   }
 
   async function enviar(evento: FormEvent) {
     evento.preventDefault();
+    if (enviando.current) return;
     setError("");
+    if (!normalizarRut(rut)) {
+      setError("Revise el RUT y su dígito verificador.");
+      return;
+    }
+    if (
+      !hora ||
+      !bloques.some((b) => b.hora === hora && horaVigente(fecha, b))
+    ) {
+      setError("Seleccione un horario disponible.");
+      return;
+    }
+    enviando.current = true;
+    setGuardando(true);
     try {
-      const respuesta = await api<{ cita: { id: string }; alertaInasistencias: boolean }>("/api/citas", {
-        method: "POST",
-        body: {
-          tipoTramiteId: tipoId,
-          fecha,
-          hora,
-          clases,
-          licenciaObtenidaEl: licencia || undefined,
-          nacionalidad: tipoId === "CANJE_EXTRANJERA" ? nacionalidad : undefined,
-          declaraDomicilioRecoleta: domicilio,
-          ciudadano: { rut, nombres, apellidos, email: sinCorreo ? undefined : email, sinCorreo, telefono: telefono || undefined, fechaNacimiento: nacimiento || undefined },
+      const cuerpo = {
+        tipoTramiteId: tipoId,
+        fecha,
+        hora,
+        clases,
+        licenciaObtenidaEl: licencia || undefined,
+        nacionalidad: tipoId === "CANJE_EXTRANJERA" ? nacionalidad : undefined,
+        declaraDomicilioRecoleta: domicilio,
+        ciudadano: {
+          rut,
+          nombres,
+          apellidos,
+          email: sinCorreo ? undefined : email,
+          sinCorreo,
+          telefono: telefono || undefined,
+          fechaNacimiento: nacimiento || undefined,
         },
+      };
+      const serializado = JSON.stringify(cuerpo);
+      if (intento.current.cuerpo !== serializado)
+        intento.current = { cuerpo: serializado, clave: crypto.randomUUID() };
+      const respuesta = await api<{
+        cita: { id: string };
+        alertaInasistencias: boolean;
+      }>("/api/citas", {
+        method: "POST",
+        body: cuerpo,
+        idempotencyKey: intento.current.clave,
       });
       setCreada(respuesta.cita.id);
+      if (respuesta.alertaInasistencias)
+        setAvisoPersona("La persona registra dos o más inasistencias.");
     } catch (falla) {
       setError(falla instanceof Error ? falla.message : "No se pudo reservar.");
+      enviando.current = false;
+    } finally {
+      setGuardando(false);
     }
   }
 
-  const volver = params.get("agenda") === "primera_vez" ? "/agenda/primera_vez" : params.get("agenda") === "general" ? "/agenda/general" : "/";
+  const destino = params.get("volver");
+  const volver =
+    destino && /^\/agenda\/(general|primera_vez)(\?|$)/.test(destino)
+      ? destino
+      : params.get("agenda") === "primera_vez"
+        ? "/agenda/primera_vez"
+        : params.get("agenda") === "general"
+          ? "/agenda/general"
+          : "/";
 
   if (creada) {
     return (
       <div className="fixed inset-0 z-40 grid place-items-center bg-[#141b2b]/55 px-4">
         <section className="superficie grid w-full max-w-md gap-4 p-6">
           <h1 className="text-2xl font-semibold">Cita agendada</h1>
-          <Link className="btn bg-pine text-white hover:bg-pine-dark" to={`/citas/${creada}`}>Abrir</Link>
+          <p className="text-sm text-muted">
+            {nombres} {apellidos} · {fecha.split("-").reverse().join("-")} · {hora}
+          </p>
+          {avisoPersona.includes("inasistencias") ? (
+            <Aviso tono="info">{avisoPersona}</Aviso>
+          ) : null}
+          {tipo && documentosRequeridos({ agenda_id: tipo.agenda_id, tipo_tramite_id: tipo.id, requiere_carnet: tipo.requiere_carnet, requiere_licencia: tipo.requiere_licencia }).length > 0 ? (
+            <p className="flex items-center gap-2 text-sm font-semibold text-[#9a5b00]">
+              <Docs cargados={0} requeridos={documentosRequeridos({ agenda_id: tipo.agenda_id, tipo_tramite_id: tipo.id, requiere_carnet: tipo.requiere_carnet, requiere_licencia: tipo.requiere_licencia }).length} />
+              Documentos pendientes
+            </p>
+          ) : (
+            <a className="btn border border-line bg-white" href={`/api/citas/${creada}/comprobante.pdf`} target="_blank" rel="noreferrer">Comprobante PDF</a>
+          )}
+          <Link className="btn border border-line bg-white" to={volver}>
+            Volver a la agenda
+          </Link>
+          <Link
+            className="btn bg-pine text-white hover:bg-pine-dark"
+            to={`/citas/${creada}`}
+          >
+            {tipo && documentosRequeridos({ agenda_id: tipo.agenda_id, tipo_tramite_id: tipo.id, requiere_carnet: tipo.requiere_carnet, requiere_licencia: tipo.requiere_licencia }).length > 0 ? "Fotografiar documentos" : "Abrir"}
+          </Link>
         </section>
       </div>
     );
   }
 
   return (
-    <div className="fixed inset-0 z-40 overflow-y-auto bg-[#141b2b]/55 px-3 py-6 sm:px-4 sm:py-10">
-    <form onSubmit={enviar} className="superficie mx-auto grid w-full max-w-xl gap-5 p-5 sm:p-7" noValidate>
-      <div className="flex items-start justify-between gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Nueva cita</h1>
-        <Link className="rounded-full px-3 py-1.5 text-sm text-muted hover:bg-paper hover:text-ink" to={volver}>Cerrar</Link>
-      </div>
-      <ol className="grid grid-cols-3 gap-2">
-        {[["1", "Trámite"], ["2", "Horario"], ["3", "Persona"]].map(([numero, texto]) => (
-          <li key={numero} className="rounded-lg bg-paper px-2.5 py-2">
-            <span className="mb-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-pine text-[11px] font-semibold text-white">{numero}</span>
-            <span className="block text-sm font-medium">{texto}</span>
-          </li>
-        ))}
-      </ol>
-      <p className="sr-only">1 · Trámite</p>
-      {error ? <Aviso>{error}</Aviso> : null}
-      <Campo id="tipo" etiqueta="Tipo de trámite">
-        <select id="tipo" className={claseCampo} value={tipoId} onChange={(e) => setTipoId(e.target.value)} required>
-          {tipos.map((item) => <option key={item.id} value={item.id}>{item.nombre}</option>)}
-        </select>
-      </Campo>
-      {tipo?.id.startsWith("CONTROL_") ? (
-        <Fecha id="licencia" etiqueta="Licencia obtenida el" valor={licencia} alCambiar={setLicencia} />
-      ) : null}
-      {tipoId === "CANJE_EXTRANJERA" ? (
-        <Campo id="nacionalidad" etiqueta="Nacionalidad">
-          <input id="nacionalidad" className={claseCampo} value={nacionalidad} onChange={(e) => setNacionalidad(e.target.value)} />
+    <div className="fixed inset-0 z-40 overflow-y-auto bg-[#141b2b]/55 px-3 py-4 sm:px-4 sm:py-6">
+      <form
+        onSubmit={enviar}
+        className="superficie booking-form mx-auto grid w-full max-w-2xl gap-4 p-4 sm:p-6"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <h1 className="page-title">{params.get("agenda") === "primera_vez" ? "Examen práctico" : "Nueva cita"}</h1>
+          <Link
+            className="rounded-full px-3 py-1.5 text-sm text-muted hover:bg-paper hover:text-ink"
+            to={volver}
+          >
+            Cerrar
+          </Link>
+        </div>
+        <fieldset
+          className="grid gap-3 rounded-xl border border-line bg-paper p-4"
+          disabled={guardando}
+        >
+          <legend className="px-1 text-sm font-semibold">
+            01 · Identificar persona
+          </legend>
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="min-w-0 flex-1">
+              <Campo id="rut" etiqueta="RUT">
+                <input
+                  id="rut"
+                  className={claseCampo}
+                  autoFocus
+                  inputMode="text"
+                  autoComplete="off"
+                  value={rut}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void buscarPersona();
+                    }
+                  }}
+                  onChange={(e) => {
+                    consultaRut.current++;
+                    setBuscando(false);
+                    setRut(mascaraRut(e.target.value));
+                    setAvisoPersona("");
+                    setExamen(null);
+                    setError("");
+                    setActivas([]);
+                    setNombres("");
+                    setApellidos("");
+                    setEmail("");
+                    setSinCorreo(false);
+                    setTelefono("");
+                    setNacimiento("");
+                  }}
+                  required
+                />
+              </Campo>
+            </div>
+            <button
+              type="button"
+              disabled={buscando}
+              className="btn border border-line bg-white"
+              onClick={() => void buscarPersona()}
+            >
+              {buscando ? "Buscando…" : "Buscar RUT"}
+            </button>
+          </div>
+          {avisoPersona ? (
+            <p role="status" className="text-sm">
+              {avisoPersona}
+            </p>
+          ) : null}
+          {activas.map((cita) => (
+            <Link
+              key={cita.id}
+              className="text-sm text-sky underline"
+              to={`/citas/${cita.id}`}
+            >
+              Cita activa: {cita.fecha} a las {cita.hora}. Abrir ficha
+            </Link>
+          ))}
+        </fieldset>
+        {error ? <Aviso>{error}</Aviso> : null}
+        {params.get("agenda") === "primera_vez" && examen?.examenActivo ? (
+          <Link className="text-sm font-semibold text-sky underline" to={`/citas/${examen.examenActivo.id}`}>
+            Examen práctico {examen.examenActivo.fecha} {examen.examenActivo.hora}
+          </Link>
+        ) : null}
+        {params.get("agenda") === "primera_vez" && examen?.habilitado ? (
+          <p className="text-base font-semibold">{nombres} {apellidos}</p>
+        ) : null}
+        {params.get("agenda") !== "primera_vez" ? (
+        <>
+        <h2 className="form-section-title">
+          <span aria-hidden>02</span> Trámite y horario
+        </h2>
+        <Campo id="tipo" etiqueta="Tipo de trámite">
+          <select
+            id="tipo"
+            className={claseCampo}
+            value={tipoId}
+            onChange={(e) => setTipoId(e.target.value)}
+            required
+          >
+            {tipos.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.nombre}
+              </option>
+            ))}
+          </select>
         </Campo>
-      ) : null}
-      <p className="sr-only">2 · Horario</p>
-      <Fecha id="dia" etiqueta="Día" valor={fecha} alCambiar={setFecha} />
-      <fieldset className="grid gap-2">
-        <legend className="text-sm font-semibold">Hora</legend>
-        <div className="flex flex-wrap gap-2">
-          {bloques.filter((bloque) => bloque.usados < bloque.capacidad).map((bloque) => (
-            <label key={bloque.hora} className={`h-10 cursor-pointer rounded-full border px-3 text-sm leading-10 ${hora === bloque.hora ? "border-[#1e283c] bg-[#1e283c] text-white" : "border-[#d5deef] bg-[#f4f7fd] text-[#1e283c]"}`}>
-              <input className="sr-only" type="radio" name="hora" value={bloque.hora} checked={hora === bloque.hora} onChange={() => setHora(bloque.hora)} required />
-              {bloque.hora}
+        {tipo?.id.startsWith("CONTROL_") ? (
+          <Fecha
+            id="licencia"
+            etiqueta="Licencia obtenida el"
+            valor={licencia}
+            alCambiar={setLicencia}
+          />
+        ) : null}
+        {tipoId === "CANJE_EXTRANJERA" ? (
+          <Campo id="nacionalidad" etiqueta="Nacionalidad">
+            <input
+              id="nacionalidad"
+              className={claseCampo}
+              value={nacionalidad}
+              onChange={(e) => setNacionalidad(e.target.value)}
+            />
+          </Campo>
+        ) : null}
+        </>
+        ) : (
+          <h2 className="form-section-title">Horario</h2>
+        )}
+        {params.get("agenda") === "primera_vez" && !examen?.habilitado ? null : (
+        <>
+        {errorHoras ? (
+          <Aviso>
+            {errorHoras}{" "}
+            <button
+              type="button"
+              className="underline"
+              onClick={() => setRevisionHoras((n) => n + 1)}
+            >
+              Reintentar horarios
+            </button>
+          </Aviso>
+        ) : null}
+        {cargandoHoras ? (
+          <p role="status" className="text-sm text-muted">
+            Cargando horarios…
+          </p>
+        ) : null}
+        {!cargandoHoras &&
+        !errorHoras &&
+        tipo?.agenda_id &&
+        !bloques.some((b) => horaVigente(fecha, b)) ? (
+          <Aviso tono="info">No hay cupos disponibles para este día.</Aviso>
+        ) : null}
+        {tipo && !tipo.requiere_agenda ? (
+          <Aviso tono="info">
+            Este trámite no requiere reserva en esta agenda.
+          </Aviso>
+        ) : null}
+        <Fecha id="dia" etiqueta="Día" valor={fecha} alCambiar={setFecha} />
+        <fieldset className="grid gap-2">
+          <legend className="text-sm font-semibold">Hora</legend>
+          <div className="flex flex-wrap gap-2">
+            {bloques
+              .filter((bloque) => horaVigente(fecha, bloque))
+              .map((bloque) => (
+                <label
+                  key={bloque.hora}
+                  className={`h-10 cursor-pointer rounded-full border px-3 text-sm leading-10 ${hora === bloque.hora ? "border-[#1e283c] bg-[#1e283c] text-white" : "border-[#d5deef] bg-[#f4f7fd] text-[#1e283c]"}`}
+                >
+                  <input
+                    className="sr-only"
+                    type="radio"
+                    name="hora"
+                    value={bloque.hora}
+                    checked={hora === bloque.hora}
+                    onChange={() => setHora(bloque.hora)}
+                    required
+                  />
+                  {bloque.hora}
+                </label>
+              ))}
+          </div>
+        </fieldset>
+        </>
+        )}
+        {params.get("agenda") !== "primera_vez" ? (
+        <>
+        <h2 className="form-section-title">
+          <span aria-hidden>03</span> Datos de contacto
+        </h2>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Campo id="nombres" etiqueta="Nombres">
+            <input
+              id="nombres"
+              className={claseCampo}
+              value={nombres}
+              onChange={(e) => setNombres(e.target.value)}
+              required
+            />
+          </Campo>
+          <Campo id="apellidos" etiqueta="Apellidos">
+            <input
+              id="apellidos"
+              className={claseCampo}
+              value={apellidos}
+              onChange={(e) => setApellidos(e.target.value)}
+              required
+            />
+          </Campo>
+          <Campo id="email" etiqueta="Correo">
+            <input
+              id="email"
+              className={claseCampo}
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              disabled={sinCorreo}
+              required={!sinCorreo}
+            />
+          </Campo>
+          <label className="flex items-end gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={sinCorreo}
+              onChange={(e) => setSinCorreo(e.target.checked)}
+            />{" "}
+            No tiene correo
+          </label>
+          <Campo id="telefono" etiqueta="Teléfono">
+            <input
+              id="telefono"
+              className={claseCampo}
+              value={telefono}
+              onChange={(e) => setTelefono(e.target.value)}
+            />
+          </Campo>
+          <Fecha
+            id="nacimiento"
+            etiqueta="Fecha de nacimiento"
+            valor={nacimiento}
+            alCambiar={setNacimiento}
+          />
+        </div>
+        <fieldset className="flex gap-4">
+          <legend className="text-sm font-semibold">Clases</legend>
+          {["B", "C"].map((codigo) => (
+            <label key={codigo} className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={clases.includes(codigo)}
+                onChange={() => alternarClase(codigo)}
+              />{" "}
+              Clase {codigo}
             </label>
           ))}
-        </div>
-      </fieldset>
-      <p className="sr-only">3 · Persona</p>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Campo id="rut" etiqueta="RUT"><input id="rut" className={claseCampo} value={rut} onChange={(e) => setRut(e.target.value)} required /></Campo>
-        <Campo id="nombres" etiqueta="Nombres"><input id="nombres" className={claseCampo} value={nombres} onChange={(e) => setNombres(e.target.value)} required /></Campo>
-        <Campo id="apellidos" etiqueta="Apellidos"><input id="apellidos" className={claseCampo} value={apellidos} onChange={(e) => setApellidos(e.target.value)} required /></Campo>
-        <Campo id="email" etiqueta="Correo">
-          <input id="email" className={claseCampo} type="email" value={email} onChange={(e) => setEmail(e.target.value)} disabled={sinCorreo} required={!sinCorreo} />
-        </Campo>
-        <label className="flex items-end gap-2 text-sm"><input type="checkbox" checked={sinCorreo} onChange={(e) => setSinCorreo(e.target.checked)} /> No tiene correo</label>
-        <Campo id="telefono" etiqueta="Teléfono">
-          <input id="telefono" className={claseCampo} value={telefono} onChange={(e) => setTelefono(e.target.value)} />
-        </Campo>
-        <Fecha id="nacimiento" etiqueta="Fecha de nacimiento" valor={nacimiento} alCambiar={setNacimiento} />
-      </div>
-      <fieldset className="flex gap-4">
-        <legend className="text-sm font-semibold">Clases</legend>
-        {["B", "C"].map((codigo) => (
-          <label key={codigo} className="flex items-center gap-2"><input type="checkbox" checked={clases.includes(codigo)} onChange={() => alternarClase(codigo)} /> Clase {codigo}</label>
-        ))}
-      </fieldset>
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={domicilio} onChange={(e) => setDomicilio(e.target.checked)} />
-        Domicilio en Recoleta
-      </label>
-      <Boton>Reservar hora</Boton>
-    </form>
+        </fieldset>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={domicilio}
+            onChange={(e) => setDomicilio(e.target.checked)}
+          />
+          Domicilio en Recoleta
+        </label>
+        </>
+        ) : null}
+        <button
+          type="submit"
+          disabled={
+            guardando ||
+            buscando ||
+            cargandoHoras ||
+            Boolean(errorHoras) ||
+            !tipo?.requiere_agenda ||
+            !hora ||
+            (params.get("agenda") === "primera_vez" && !examen?.habilitado)
+          }
+          className="btn bg-sky text-white"
+          aria-busy={guardando}
+        >
+          {guardando ? "Guardando reserva…" : "Confirmar reserva"}
+        </button>
+      </form>
     </div>
   );
+}
+
+function horaVigente(fecha: string, bloque: Bloque): boolean {
+  if (bloque.reservable === false) return false;
+  if (bloque.usados >= bloque.capacidad) return false;
+  return bloque.reservable === true || bloquePosterior(fecha, bloque.hora, new Date());
 }

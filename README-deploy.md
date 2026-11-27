@@ -160,9 +160,9 @@ curl -sS -X PUT "$BASE/workers/scripts/$SCRIPT/schedules" \
 
 ## 7. Secrets
 
-No hay que subir ninguno para que el entorno funcione. `secrets.test.json` lista los nombres. `SESSION_SECRET` trae un valor aleatorio de ejemplo y `subir: false`: el Worker no lo lee. Drive y correo quedan en `null` a propósito; un valor inventado no sirve y, si se sube junto con la carpeta, la foto intentaría Google antes de caer a R2.
+No hay que subir ninguno para que el entorno funcione. `secrets.test.json` lista los nombres. `SESSION_SECRET` trae un valor aleatorio de ejemplo y `subir: false`: el Worker no lo lee. Drive y correo quedan en `null` a propósito; un valor inventado no sirve y, si se sube, cada foto intentaría Google, fallaría y quedaría en la cola `cola_drive`.
 
-Cuando existan credenciales reales de la cuenta personal, cada secret es:
+Con un Gmail personal se usan tres secrets: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` y `GOOGLE_OAUTH_REFRESH_TOKEN` (`GOOGLE_DRIVE_FOLDER_ID` queda vacío). Cada uno se carga así, desde una terminal propia:
 
 ```bash
 curl -sS -X PUT "$BASE/workers/scripts/$SCRIPT/secrets" \
@@ -171,7 +171,7 @@ curl -sS -X PUT "$BASE/workers/scripts/$SCRIPT/secrets" \
   --data '{"name":"GOOGLE_OAUTH_REFRESH_TOKEN","text":"...","type":"secret_text"}'
 ```
 
-Los pasos de Google están en `docs/google-drive.md`. Hasta entonces las fotos quedan en el bucket de prueba.
+Los pasos de Google están en `docs/google-drive.md`. Hasta entonces las fotos del entorno de prueba quedan en D1 (`documentos.contenido`), porque ese Worker no tiene bucket R2.
 
 ## 8. Dejarlo alcanzable
 

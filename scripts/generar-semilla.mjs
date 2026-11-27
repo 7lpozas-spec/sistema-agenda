@@ -43,7 +43,17 @@ function horas(inicio, fin, paso) {
 }
 
 function q(valor) {
+  if (valor === null || valor === undefined) return "NULL";
   return `'${String(valor).replaceAll("'", "''")}'`;
+}
+
+function tiempos(id, fecha, hora, estado) {
+  if (estado !== "ASISTIO" && estado !== "ATRASADO") return [null, null, null];
+  const espera = 12 + (id.charCodeAt(11) % 24);
+  const [hh, mm] = hora.split(":").map(Number);
+  const total = hh * 60 + mm + espera;
+  const salida = `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+  return [OPERADOR, `${fecha}T${hora}:00`, `${fecha}T${salida}:00`];
 }
 
 function bloques(valores, columnas, tabla) {
@@ -114,7 +124,7 @@ for (let offset = -48; offset <= 12; offset += 1) {
     const estado = fecha < hoy ? estadoPasado(offset + n) : "AGENDADA";
     const persona = elegir("GENERAL", estado);
     if (!persona) continue;
-    citas.push([`cit-g-${fecha}-${hora}-${n}`, "GENERAL", persona.id, n % 5 === 0 ? "CONTROL_RENOVACION_L19495" : "CONTROL_RENOVACION", '["B"]', fecha, hora, estado, 0, "PRESENCIAL", 1, 2, OPERADOR, AHORA]);
+    citas.push([`cit-g-${fecha}-${hora}-${n}`, "GENERAL", persona.id, n % 5 === 0 ? "CONTROL_RENOVACION_L19495" : "CONTROL_RENOVACION", '["B"]', fecha, hora, estado, 0, "PRESENCIAL", 1, 2, OPERADOR, AHORA, ...tiempos(`cit-g-${fecha}-${hora}-${n}`, fecha, hora, estado)]);
     if (estado !== "CANCELADA") sumarUso("GENERAL", fecha, hora);
     n += 1;
   }
@@ -123,7 +133,7 @@ for (let offset = -48; offset <= 12; offset += 1) {
     const estado = fecha < hoy ? estadoPasado(offset + hora.charCodeAt(0)) : "AGENDADA";
     const persona = elegir("PRIMERA_VEZ", estado);
     if (!persona) continue;
-    citas.push([`cit-p-${fecha}-${hora}`, "PRIMERA_VEZ", persona.id, "PRIMER_OTORG_NO_PROF", '["B"]', fecha, hora, estado, 0, "PRESENCIAL", 1, 2, OPERADOR, AHORA]);
+    citas.push([`cit-p-${fecha}-${hora}`, "PRIMERA_VEZ", persona.id, "PRIMER_OTORG_NO_PROF", '["B"]', fecha, hora, estado, 0, "PRESENCIAL", 1, 2, OPERADOR, AHORA, ...tiempos(`cit-p-${fecha}-${hora}`, fecha, hora, estado)]);
     if (estado !== "CANCELADA") sumarUso("PRIMERA_VEZ", fecha, hora);
   }
 }
@@ -150,7 +160,7 @@ const lineas = [
   ...bloques(ciudadanos.map((persona) => [persona.id, persona.rut, persona.nombres, persona.apellidos, `${persona.id}@ejemplo.cl`, persona.telefono, 0, AHORA, AHORA]), "id, rut, nombres, apellidos, email, telefono, sin_correo, creado_at, actualizado_at", "ciudadanos"),
   ...bloques(dias, "agenda_id, fecha, capacidad, usados, sobrecupo_tope, sobrecupo_usados", "cupos_dia"),
   ...bloques(bloquesCupo, "agenda_id, fecha, hora, capacidad, usados", "cupos_bloque"),
-  ...bloques(citas, "id, agenda_id, ciudadano_id, tipo_tramite_id, clases, fecha, hora, estado, es_sobrecupo, canal, declara_domicilio_recoleta, docs_requeridos, creado_por, creado_at", "citas"),
+  ...bloques(citas, "id, agenda_id, ciudadano_id, tipo_tramite_id, clases, fecha, hora, estado, es_sobrecupo, canal, declara_domicilio_recoleta, docs_requeridos, creado_por, creado_at, asistencia_marcada_por, asistencia_at, atencion_at", "citas"),
 ];
 
 writeFileSync(new URL("../seed/semilla.sql", import.meta.url), `${lineas.join("\n")}\n`);

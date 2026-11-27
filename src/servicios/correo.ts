@@ -1,4 +1,4 @@
-import { documentosRequeridos, type TipoTramite } from "../domain/catalogo";
+import { documentosRequeridos, type EntradaDocumentos } from "../domain/catalogo";
 
 export interface Mensaje {
   citaId: string | null;
@@ -27,10 +27,10 @@ export function crearCorreo(env: Env): MailSender {
       },
     };
   }
-  return { async enviar() { return { ok: true, id: `local-${crypto.randomUUID()}` }; } };
+  return { async enviar() { return { ok: false, error: "Correo no configurado: faltan MAIL_API_URL o MAIL_API_KEY. No se envió el mensaje." }; } };
 }
 
-export async function despachar(env: Env, mensaje: Mensaje): Promise<void> {
+export async function despachar(env: Env, mensaje: Mensaje): Promise<boolean> {
   const correo = crearCorreo(env);
   let estado = "ENVIADO";
   let error: string | null = null;
@@ -52,6 +52,7 @@ export async function despachar(env: Env, mensaje: Mensaje): Promise<void> {
   )
     .bind(crypto.randomUUID(), mensaje.citaId, mensaje.tipo, mensaje.destinatario, estado, proveedor, error, new Date().toISOString())
     .run();
+  return estado === "ENVIADO";
 }
 
 export async function armarCorreo(
@@ -78,11 +79,10 @@ export async function armarCorreo(
   };
 }
 
-export function textoDocumentos(tipo: Pick<TipoTramite, "requiere_carnet" | "requiere_licencia">): string {
-  const docs = documentosRequeridos(tipo);
-  if (docs.length === 0) return "cédula de identidad";
+export function textoDocumentos(cita: EntradaDocumentos): string {
+  const docs = documentosRequeridos(cita);
   const partes: string[] = [];
-  if (tipo.requiere_carnet) partes.push("cédula de identidad");
-  if (tipo.requiere_licencia) partes.push("licencia anterior");
+  if (docs.some((doc) => doc.startsWith("CARNET_"))) partes.push("cédula de identidad");
+  if (docs.some((doc) => doc.startsWith("LICENCIA_"))) partes.push("licencia anterior");
   return partes.join(" y ");
 }

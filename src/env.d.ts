@@ -10,4 +10,6 @@ interface Env {
   MIGRATION_SCHEMA?: string;
   MIGRATION_REFERENCE?: string;
   MIGRATION_FOTO?: string;
+  MIGRATION_MESON?: string;
+  MIGRATION_EXAMEN?: string;
 }

@@ -1,4 +1,4 @@
-export const ROLES = ["ADMIN", "OPERADOR_AGENDA", "INSTRUCTOR"] as const;
+export const ROLES = ["ADMIN", "OPERADOR_AGENDA", "INSTRUCTOR", "RECEPCION"] as const;
 export type Rol = (typeof ROLES)[number];
 
 export const AGENDAS = ["GENERAL", "PRIMERA_VEZ"] as const;
@@ -35,10 +35,36 @@ export function esAgenda(valor: string): valor is AgendaId {
   return (AGENDAS as readonly string[]).includes(valor);
 }
 
-export function documentosRequeridos(tipo: Pick<TipoTramite, "requiere_carnet" | "requiere_licencia">): TipoDocumento[] {
+/** Entrada común: una cita (agenda real + tipo) o el tipo al crear la reserva. */
+export interface EntradaDocumentos {
+  agenda_id?: string | null;
+  tipo_tramite_id?: string | null;
+  requiere_carnet?: number;
+  requiere_licencia?: number;
+  tipo?: Pick<TipoTramite, "id" | "requiere_carnet" | "requiere_licencia"> | null;
+}
+
+export function documentosRequeridos(cita: EntradaDocumentos): TipoDocumento[] {
+  if (cita.agenda_id === "PRIMERA_VEZ") return [];
+  const tipoId = cita.tipo?.id ?? cita.tipo_tramite_id ?? "";
+  if (tipoId && esPrimerOtorgamiento(tipoId)) return ["CARNET_FRENTE", "CARNET_REVERSO"];
+  const carnet = cita.tipo?.requiere_carnet ?? cita.requiere_carnet;
+  const licencia = cita.tipo?.requiere_licencia ?? cita.requiere_licencia;
   const lista: TipoDocumento[] = [];
-  if (tipo.requiere_carnet) lista.push("CARNET_FRENTE", "CARNET_REVERSO");
-  if (tipo.requiere_licencia) lista.push("LICENCIA_FRENTE", "LICENCIA_REVERSO");
+  if (carnet) lista.push("CARNET_FRENTE", "CARNET_REVERSO");
+  if (licencia) lista.push("LICENCIA_FRENTE", "LICENCIA_REVERSO");
+  return lista;
+}
+
+export function cantidadDocumentosRequeridos(cita: EntradaDocumentos): number {
+  return documentosRequeridos(cita).length;
+}
+
+export function documentosAPresentar(cita: EntradaDocumentos): string[] {
+  const docs = documentosRequeridos(cita);
+  const lista: string[] = [];
+  if (docs.some((doc) => doc.startsWith("CARNET_"))) lista.push("Cédula de identidad vigente");
+  if (docs.some((doc) => doc.startsWith("LICENCIA_"))) lista.push("Licencia de conducir anterior");
   return lista;
 }
 
@@ -54,6 +80,7 @@ export const NOMBRE_ROL: Record<Rol, string> = {
   ADMIN: "Administración",
   OPERADOR_AGENDA: "Operador de agenda",
   INSTRUCTOR: "Instructor",
+  RECEPCION: "Recepción",
 };
 
 export const FECHA_CORTE_PRIMERA_VEZ = "1984-02-07";

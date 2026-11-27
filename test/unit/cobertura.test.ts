@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { puedeCrearCita, puedeVerAgenda } from "../../src/domain/permisos";
+import { puedeCrearCita, puedeVerAgenda, puedeVerDashboard } from "../../src/domain/permisos";
 import { limpiarLinea, correoValido } from "../../src/domain/texto";
 import { cabecerasDeSeguridad } from "../../src/security/cabeceras";
 import { contrasenaAceptable, hashContrasena, verificarContrasena } from "../../src/security/claves";
@@ -12,6 +12,10 @@ describe("permisos y cabeceras", () => {
     expect(puedeVerAgenda("OPERADOR_AGENDA", "PRIMERA_VEZ")).toBe(true);
     expect(puedeVerAgenda("INSTRUCTOR", "PRIMERA_VEZ")).toBe(true);
     expect(puedeVerAgenda("INSTRUCTOR", "GENERAL")).toBe(false);
+    expect(puedeVerDashboard("INSTRUCTOR")).toBe(true);
+    expect(puedeVerDashboard("RECEPCION")).toBe(true);
+    expect(puedeCrearCita("RECEPCION", "GENERAL")).toBe(false);
+    expect(puedeVerAgenda("RECEPCION", "GENERAL")).toBe(false);
     expect(limpiarLinea("  Ana  ")).toBe("Ana");
     expect(correoValido("ana@ejemplo.cl")).toBe(true);
     expect(cabecerasDeSeguridad(true)["Content-Security-Policy"]).toContain("script-src 'self'");
